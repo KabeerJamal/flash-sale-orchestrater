@@ -1,0 +1,51 @@
+version: '3.9'
+services:
+  db:
+    image: postgres:16-alpine
+    env_files:
+      - ./env
+    volumes:
+     #host_path:container_path(this is where the standard path for postgres data directory is)
+      - ./data:/var/lib/postgresql/data
+      #Anything you put in ./init (SQL or .sh files) will run once when the database is empty.
+      # official Postgres Docker image checks /docker-entrypoint-initdb.d on container start.
+      #If the database is empty, it runs all .sql and .sh files there automatically.
+      - ./init:/docker-entrypoint-initdb.d
+    ports: 
+      -'5432:5432'
+
+  redpanda: 
+    image: redpanda/redpanda:v23.2.11
+    ports:
+    #if you change 9092 inside the container (the right side), Kafka won’t work,
+    #because the image is preconfigured to listen on 9092 for clients.
+      - '9092:9092'
+    #this ensures Yes. It ensures your app can connect whether you are running it directly
+    #on your machine (for easy debugging) or inside a container (for final testing) without changing the Redpanda configuration.
+      - '29092:29092'
+    volumes:
+      - ./redpanda_data:/var/lib/redpanda/data
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+
+
+
+  redis: 
+    image: redis:8-alpine
+    ports:
+      #default redis port is 6379
+      - '6379:6379'
+    volumes:
+      - ./redis_data:/data
+
+
+networks:
+  default:
