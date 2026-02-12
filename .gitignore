@@ -1,1 +1,11 @@
-.env
+env
+/data
+/redis_data
+/redpanda_data
+
+*.exe
+*.dll
+*.obj
+*.log
+/bin/
+/vendor/  

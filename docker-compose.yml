@@ -1,8 +1,7 @@
-version: '3.9'
 services:
   db:
     image: postgres:16-alpine
-    env_files:
+    env_file:
       - ./env
     volumes:
      #host_path:container_path(this is where the standard path for postgres data directory is)
@@ -10,12 +9,12 @@ services:
       #Anything you put in ./init (SQL or .sh files) will run once when the database is empty.
       # official Postgres Docker image checks /docker-entrypoint-initdb.d on container start.
       #If the database is empty, it runs all .sql and .sh files there automatically.
-      - ./init:/docker-entrypoint-initdb.d
+      ##- ./init:/docker-entrypoint-initdb.d
     ports: 
-      -'5432:5432'
+      - '5432:5432'
 
   redpanda: 
-    image: redpanda/redpanda:v23.2.11
+    image: redpandadata/redpanda:v23.2.11
     ports:
     #if you change 9092 inside the container (the right side), Kafka won’t work,
     #because the image is preconfigured to listen on 9092 for clients.
