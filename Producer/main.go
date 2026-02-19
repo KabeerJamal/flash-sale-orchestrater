@@ -12,7 +12,7 @@ import (
 )
 
 func main() { // main function — the entry point
-	err := godotenv.Load("env")
+	err := godotenv.Load("../.env")
 	if err != nil {
 		panic(err)
 	}
@@ -20,27 +20,30 @@ func main() { // main function — the entry point
 	user := os.Getenv("POSTGRES_USER")
 	pass := os.Getenv("POSTGRES_PASSWORD")
 	dbname := os.Getenv("POSTGRES_DB")
-	host := "localhost"
+	host := os.Getenv("DB_HOST_local") //TODO: hardcoded, need to fix this
+
+	kafkaBrokerAddress := os.Getenv("KAFKA_BROKER_HOST_local")
 
 	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s:5432/%s?sslmode=disable",
+		"postgres://%s:%s@%s/%s?sslmode=disable",
 		user, pass, host, dbname,
 	)
 
 	//applying migration
-	m, err := migrate.New("file://./migrations", connStr)
+	m, err := migrate.New("file://../migrations", connStr)
 
 	if err != nil {
-		fmt.Print("yo")
 		panic(err)
 	}
 	err = m.Up() // applies all unapplied migrations automatically
 	if err != nil && err != migrate.ErrNoChange {
-		fmt.Print("yo2")
 		panic(err)
 	}
 
-	StartProducer()
+	go StartProducer(kafkaBrokerAddress, "flashsale-events", "order-id-a", "sale started AAAA")
+	go StartProducer(kafkaBrokerAddress, "flashsale-events", "order-id-b", "sale started BBBB")
+	go StartProducer(kafkaBrokerAddress, "flashsale-events", "order-id-c", "sale started CCCC")
+	go StartProducer(kafkaBrokerAddress, "flashsale-events", "order-id-d", "sale started DDDD")
 
 	//sending request to certain server
 	r := gin.Default()

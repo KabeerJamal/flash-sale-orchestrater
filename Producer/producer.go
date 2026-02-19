@@ -8,11 +8,11 @@ import (
 )
 
 // Example function you want to call from main.go
-func StartProducer() {
+func StartProducer(kafkaBrokerAddress string, topic string, key string, value string) {
 	//create a write pointing to RedPanda
 	w := kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  []string{"localhost:9092"},
-		Topic:    "flashsale-events",
+		Brokers:  []string{kafkaBrokerAddress},
+		Topic:    topic,
 		Balancer: &kafka.LeastBytes{},
 	})
 	//write one message
@@ -21,8 +21,8 @@ func StartProducer() {
 	err := w.WriteMessages(
 		context.Background(),
 		kafka.Message{
-			Key:   []byte("order-id-1"),
-			Value: []byte("Flash Sale started"),
+			Key:   []byte(key),
+			Value: []byte(value),
 		},
 	)
 	if err != nil {
