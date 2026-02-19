@@ -2,7 +2,7 @@ services:
   db:
     image: postgres:16-alpine
     env_file:
-      - ./env
+      - ./.env
     volumes:
      #host_path:container_path(this is where the standard path for postgres data directory is)
       - ./data:/var/lib/postgresql/data
@@ -19,7 +19,7 @@ services:
     #if you change 9092 inside the container (the right side), Kafka won’t work,
     #because the image is preconfigured to listen on 9092 for clients.
       - '9092:9092'
-    #this ensures Yes. It ensures your app can connect whether you are running it directly
+    #Yes. It ensures your app can connect whether you are running it directly
     #on your machine (for easy debugging) or inside a container (for final testing) without changing the Redpanda configuration.
       - '29092:29092'
     volumes:
@@ -45,6 +45,92 @@ services:
     volumes:
       - ./redis_data:/data
 
+  consumerA:
+    image: flash-sale-orchestrater-consumera 
+    env_file:
+      - ./.env
+    build:
+      context: .
+      dockerfile: Dockerfile 
+    volumes:
+      - ./Consumers:/app      # live hot-reload
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file
+    command: go run ./consumerA
 
+
+  consumerB:
+    image: flash-sale-orchestrater-consumerb
+    env_file:
+      - ./.env
+    build:
+      context: .
+      dockerfile: Dockerfile 
+    volumes:
+      - ./Consumers:/app
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file        
+    command: go run ./consumerB
+
+  consumerC:
+    image: flash-sale-orchestrater-consumerc
+    env_file:
+      - ./.env
+    build:
+      context: .
+      dockerfile: Dockerfile  
+    volumes:
+      - ./Consumers:/app
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file    
+    command: go run ./consumerC
+
+  consumerD:
+    image: flash-sale-orchestrater-consumerd
+    env_file:
+      - ./.env
+    build:
+      context: .
+      dockerfile: Dockerfile   
+    volumes:
+      - ./Consumers:/app
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file     
+    command: go run ./consumerD
+
+  #----FOR PRODUCTION
+  # consumerA:
+  #   build:
+  #     context: ./Consumers
+  #     dockerfile: DockerFile
+  #   image: flash-sale-orchestrater-consumera  
+  #   command: /app/bin/a 
+  #   deploy: {replicas: 3}
+
+  # consumerB:
+  #   build:
+  #     context: ./Consumers
+  #     dockerfile: DockerFile
+  #   image: flash-sale-orchestrater-consumerb
+  #   command: /app/bin/b 
+  #   deploy: {replicas: 3}
+
+  # consumerC:
+  #   build:
+  #     context: ./Consumers
+  #     dockerfile: DockerFile
+  #   image: flash-sale-orchestrater-consumerc   
+  #   command: /app/bin/c 
+  #   deploy: {replicas: 3}
+
+  
+  # consumerD:
+  #   build:
+  #     context: ./Consumers
+  #     dockerfile: DockerFile
+  #   image: flash-sale-orchestrater-consumerd  
+  #   command: /app/bin/d 
+  #   deploy: {replicas: 3}
+  
 networks:
   default:
