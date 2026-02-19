@@ -1,4 +1,5 @@
 env
+.env
 /data
 /redis_data
 /redpanda_data
