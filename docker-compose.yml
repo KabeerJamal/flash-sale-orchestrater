@@ -45,7 +45,7 @@ services:
     volumes:
       - ./redis_data:/data
 
-  consumerA:
+  reservationWorker:
     image: flash-sale-orchestrater-consumera 
     env_file:
       - ./.env
@@ -57,6 +57,8 @@ services:
       - ./go.mod:/app/go.mod       # Mounts the specific file
       - ./go.sum:/app/go.sum       # Mounts the specific file
     command: go run ./consumerA
+    deploy:
+      replicas: 3
 
 
   consumerB:
@@ -68,9 +70,11 @@ services:
       dockerfile: Dockerfile 
     volumes:
       - ./Consumers:/app
-      - ./go.mod:/app/go.mod       # Mounts the specific file
-      - ./go.sum:/app/go.sum       # Mounts the specific file        
+      - ./go.mod:/app/go.mod      
+      - ./go.sum:/app/go.sum           
     command: go run ./consumerB
+    deploy:
+      replicas: 3
 
   consumerC:
     image: flash-sale-orchestrater-consumerc
@@ -81,9 +85,11 @@ services:
       dockerfile: Dockerfile  
     volumes:
       - ./Consumers:/app
-      - ./go.mod:/app/go.mod       # Mounts the specific file
-      - ./go.sum:/app/go.sum       # Mounts the specific file    
+      - ./go.mod:/app/go.mod     
+      - ./go.sum:/app/go.sum      
     command: go run ./consumerC
+    deploy:
+      replicas: 3
 
   consumerD:
     image: flash-sale-orchestrater-consumerd
@@ -94,9 +100,11 @@ services:
       dockerfile: Dockerfile   
     volumes:
       - ./Consumers:/app
-      - ./go.mod:/app/go.mod       # Mounts the specific file
-      - ./go.sum:/app/go.sum       # Mounts the specific file     
+      - ./go.mod:/app/go.mod       
+      - ./go.sum:/app/go.sum           
     command: go run ./consumerD
+    deploy:
+      replicas: 3
 
   #----FOR PRODUCTION
   # consumerA:
