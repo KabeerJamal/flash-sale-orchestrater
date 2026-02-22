@@ -1,0 +1,22 @@
+-- CREATE TABLE table_name (
+--     column_name DATA_TYPE Constraints
+-- );
+
+CREATE TABLE USERS (
+    userUUID UUID PRIMARY KEY,
+    userName TEXT NOT NULL
+);
+
+CREATE TABLE PHONES (
+    phoneUUID UUID PRIMARY KEY,
+    phoneName TEXT NOT NULL
+);
+
+
+CREATE TABLE RESERVATIONS (
+    ticketID UUID PRIMARY KEY,
+    phoneUUID UUID REFERENCES PHONES(phoneUUID),
+    userUUID UUID REFERENCES USERS(userUUID),
+    status TEXT CHECK ( status IN ('RESERVED', 'PAID', 'CANCELLED')),    
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
