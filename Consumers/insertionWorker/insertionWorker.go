@@ -21,8 +21,8 @@ func main() {
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress}, //TODO: this is hardcoded, need to fix that
-		Topic:   "flashsale-events",
-		GroupID: "flashsale-consumer-group-2",
+		Topic:   "Reservation-successful",
+		GroupID: "InsertionToSQL-group",
 	})
 
 	fmt.Println("Consumer B started")
@@ -41,6 +41,8 @@ func main() {
 
 		// 3. Print message
 		fmt.Printf("Received message: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+
+		//TOMMOROW: insert into SQL(also write code for inserting into phone and user first(only for demo mode))
 
 	}
 }
