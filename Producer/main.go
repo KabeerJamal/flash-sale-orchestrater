@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
@@ -24,13 +26,9 @@ func main() {
 	defer rdb.Close()
 
 	// prefill it in redis
-	ok, err := rdb.SetNX(context.Background(), "reservation", 10, 0).Result()
+	_, err := rdb.Set(context.Background(), "reservation", 10, 0).Result()
 	if err != nil {
 		log.Fatalf("redis error: %v", err)
-	}
-
-	if !ok {
-		log.Println("key already exists")
 	}
 
 	//---FETCHING ENVIORMENT VARIABLES---
@@ -64,21 +62,44 @@ func main() {
 
 	//browser sends a request with request body data
 	r := gin.Default()
-	// r.GET("/", func(c *gin.Context) {
-	// 	c.JSON(200, gin.H{"message": "Hello World"})
-	// })
+
 	r.POST("/buy-request", func(c *gin.Context) {
 		var body map[string]string
 		c.BindJSON(&body)
 
 		//generate a ticketUUID and pass it in body
+		ticketUUID := uuid.New().String()
+		body["ticketUUID"] = ticketUUID
+
 		go StartProducer(kafkaBrokerAddress, "Reservations", body)
+
 		//put ticketUUID and status in redis
-		c.JSON(200, gin.H{"status": "ok"}) //Immediate response with ticket ID and status as pending
+		rdb.Set(context.Background(), ticketUUID, "PENDING", 0).Err()
+
+		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": "PENDING"}) //Immediate response with ticket ID and status as pending
 	})
 
 	r.GET("/status/:ticketId", func(c *gin.Context) {
-		//respon with whats in redis
+		//get ticket uuid from param
+		ticketUUID := c.Param("ticketId")
+
+		//respond with whats in redis
+		resp, err := rdb.Get(context.Background(), ticketUUID).Result()
+
+		if err == redis.Nil {
+			// Key not found — expected case
+			log.Printf("ticket not found: %s", ticketUUID)
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "ticket not found",
+			})
+			return // or return custom error
+		}
+		if err != nil {
+			log.Printf("redis GET failed for ticket %s: %v", ticketUUID, err)
+			return
+		}
+		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": resp})
+
 		//its frontend duty to keep in polling until it recieves a certain response
 	})
 
