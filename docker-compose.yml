@@ -56,12 +56,12 @@ services:
       - ./Consumers:/app      # live hot-reload
       - ./go.mod:/app/go.mod       # Mounts the specific file
       - ./go.sum:/app/go.sum       # Mounts the specific file
-    command: go run ./consumerA
+    command: go run ./reservationWorker
     deploy:
       replicas: 3
 
 
-  consumerB:
+  insertionWorker:
     image: flash-sale-orchestrater-consumerb
     env_file:
       - ./.env
@@ -72,7 +72,7 @@ services:
       - ./Consumers:/app
       - ./go.mod:/app/go.mod      
       - ./go.sum:/app/go.sum           
-    command: go run ./consumerB
+    command: go run ./insertionWorker
     deploy:
       replicas: 3
 
