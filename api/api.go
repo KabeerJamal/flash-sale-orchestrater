@@ -1,9 +1,10 @@
-package main
+package api
 
 import (
 	"context"
 	"fmt"
 	"log"
+	producer "myproject/Producer"
 	"net/http"
 	"os"
 
@@ -12,30 +13,16 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
-	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
 
-func main() {
+/*
+Database/Migrations
+Redis Setup
+HTTP Router Setup
+*/
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
-	defer rdb.Close()
-
-	// prefill it in redis
-	_, err := rdb.Set(context.Background(), "reservation", 10, 0).Result()
-	if err != nil {
-		log.Fatalf("redis error: %v", err)
-	}
-
-	//---FETCHING ENVIORMENT VARIABLES---
-	err = godotenv.Load("../.env")
-	if err != nil {
-		panic(err)
-	}
+func RunAPI(ctx context.Context, migrationURL string) error {
 
 	user := os.Getenv("POSTGRES_USER")
 	pass := os.Getenv("POSTGRES_PASSWORD")
@@ -43,6 +30,20 @@ func main() {
 	host := os.Getenv("DB_HOST_local")
 
 	kafkaBrokerAddress := os.Getenv("KAFKA_BROKER_HOST_local")
+	redisAddress := os.Getenv("REDIS_local")
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddress,
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+	defer rdb.Close()
+
+	// prefill it in redis (POTENTIAL ERROR, if main shuts down and runs again, refill happens even when not supposed to happen)
+	_, err := rdb.Set(context.Background(), "reservation", 10, 0).Result()
+	if err != nil {
+		return fmt.Errorf("redis error: %w", err)
+	}
 
 	connStr := fmt.Sprintf(
 		"postgres://%s:%s@%s/%s?sslmode=disable",
@@ -50,14 +51,21 @@ func main() {
 	)
 
 	//---APPLYING MIGRATION---
-	m, err := migrate.New("file://../migrations", connStr)
+	// log.Printf("DB CONN STR: %s", connStr)
+	// wd, err := os.Getwd()
+	// if err != nil {
+	// 	fmt.Println("Error getting working directory:", err)
+	// } else {
+	// 	fmt.Println("Current working directory:", wd)
+	// }
+	m, err := migrate.New(migrationURL, connStr)
 
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("migration failed: %w", err)
 	}
 	err = m.Up() // applies all unapplied migrations automatically
 	if err != nil && err != migrate.ErrNoChange {
-		panic(err)
+		return fmt.Errorf("migration failed: %w", err)
 	}
 
 	//browser sends a request with request body data
@@ -71,7 +79,7 @@ func main() {
 		ticketUUID := uuid.New().String()
 		body["ticketUUID"] = ticketUUID
 
-		go StartProducer(kafkaBrokerAddress, "Reservations", body)
+		go producer.StartProducer(kafkaBrokerAddress, "Reservations", body)
 
 		//put ticketUUID and status in redis
 		rdb.Set(context.Background(), ticketUUID, "PENDING", 0).Err()
@@ -103,5 +111,25 @@ func main() {
 		//its frontend duty to keep in polling until it recieves a certain response
 	})
 
-	r.Run() //starts server on localhost:8080
+	/*r.Run() is an infinite loop. It completely ignores the ctx context.
+	Context you passed in, and it will block your test forever.
+	The return nil below it will literally never execute.*/
+	// r.Run() //starts server on localhost:8080
+
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+	}
+
+	// Start the server in the background so it doesn't block!
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("listen: %s\n", err)
+		}
+	}()
+
+	// Block here until the test says "Stop!" by cancelling the context
+	<-ctx.Done()
+	log.Println("Shutting down API...")
+	return srv.Shutdown(context.Background())
 }

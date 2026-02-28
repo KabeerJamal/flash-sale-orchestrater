@@ -1,4 +1,4 @@
-package main
+package worker
 
 import (
 	"context"
@@ -6,15 +6,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/joho/godotenv"
 	"github.com/segmentio/kafka-go"
 )
 
-func main() {
-	_ = godotenv.Load("../.env")
-	// if err != nil {
-	// 	panic(err)
-	// }
+func InsertionWorker(ctx context.Context) error {
 
 	kafkaBrokerAddress := os.Getenv("KAFKA_BROKER_HOST_docker")
 
@@ -36,7 +31,7 @@ func main() {
 
 		if err != nil {
 			log.Println("Error while reading:", err)
-			return
+			return err
 		}
 
 		// 3. Print message

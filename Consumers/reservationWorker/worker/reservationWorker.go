@@ -1,4 +1,4 @@
-package main
+package worker
 
 import (
 	"context"
@@ -7,26 +7,21 @@ import (
 	"log"
 	"os"
 
-	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 )
 
-func main() {
+func ReservationWorker(ctx context.Context) error {
+
+	kafkaBrokerAddress := os.Getenv("KAFKA_BROKER_HOST_docker")
+	redisAddress := os.Getenv("REDIS_docker")
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     "redis:6379",
+		Addr:     redisAddress,
 		Password: "", // no password set
 		DB:       0,  // use default DB
 	})
 	defer rdb.Close()
-
-	_ = godotenv.Load("../.env")
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	kafkaBrokerAddress := os.Getenv("KAFKA_BROKER_HOST_docker")
 
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: []string{kafkaBrokerAddress},
@@ -75,7 +70,7 @@ func main() {
 		res, err := script.Run(ctx, rdb, []string{"reservation"}).Result()
 		if err != nil {
 			log.Printf("Some problem with redis database: %v", err)
-			return
+			return err
 		}
 
 		// Redis returns numbers as int64 through go-redis
@@ -85,14 +80,14 @@ func main() {
 		err = json.Unmarshal(msg.Value, &data)
 		if err != nil {
 			log.Println(err)
-			return
+			return err
 		}
 
 		ticketUUID := data["ticketUUID"]
 		if n == -2 {
 			//error handling
 			log.Printf("Some problem with redis database")
-			return
+			return err
 		} else if n == -1 {
 			//polling code implement
 			rdb.Set(ctx, ticketUUID, "WAITING_LIST", 0).Err()
@@ -115,4 +110,5 @@ func main() {
 		}
 
 	}
+	return nil
 }

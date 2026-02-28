@@ -1,4 +1,4 @@
-package main
+package producer
 
 import (
 	"context"
@@ -28,12 +28,12 @@ func StartProducer(kafkaBrokerAddress string, topic string, message map[string]s
 
 	err = w.WriteMessages(
 		context.Background(),
-
 		kafka.Message{
 			Key:   []byte(message["userUUID"]), //TODO: hardcoded, need to fix this.
 			Value: valueBytes,
 		},
 	)
+	defer w.Close()
 	if err != nil {
 		panic(err)
 	} else {
