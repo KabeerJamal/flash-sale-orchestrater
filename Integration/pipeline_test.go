@@ -3,12 +3,14 @@ package test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 
+	insertionWorker "myproject/Consumers/insertionWorker/worker"
 	reservationWorker "myproject/Consumers/reservationWorker/worker"
 	"myproject/api"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/require"
@@ -85,9 +88,6 @@ func TestIntegrationPipeline(t *testing.T) {
 	redisEndpoint, err := redisC.Endpoint(ctx, "")
 	require.NoError(t, err)
 
-	// brokers, err := redpandaContainer.Endpoint(ctx, "") //returns a []string, just do brokers[0]
-	// require.NoError(t, err)
-
 	dbEndpoint, err := postgresContainer.Endpoint(ctx, "")
 	require.NoError(t, err)
 
@@ -98,6 +98,19 @@ func TestIntegrationPipeline(t *testing.T) {
 		panic(err)
 	}
 	defer conn.Close()
+
+	//database connection string
+	connString := fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=disable",
+		dbUser, dbPassword, dbEndpoint, dbName)
+
+	// 2. Open the connection pool
+	db, err := sql.Open("pgx", connString)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// 3. Ping to ensure the connection is actually established
+	err = db.Ping()
+	require.NoError(t, err)
 
 	//  Create the topic cleanly
 	err = conn.CreateTopics(kafka.TopicConfig{
@@ -115,22 +128,6 @@ func TestIntegrationPipeline(t *testing.T) {
 		panic(err)
 	}
 
-	//brokers = strings.ReplaceAll(brokers, "localhost", "127.0.0.1")
-	// os.Setenv("KAFKA_BROKER_HOST_local", brokers)
-	// os.Setenv("KAFKA_BROKER_HOST_docker", brokers)
-
-	// os.Setenv("KAFKA_BROKER_HOST_local", brokerAddress)
-	// os.Setenv("KAFKA_BROKER_HOST_docker", brokerAddress)
-
-	// // dbEndpoint = strings.ReplaceAll(dbEndpoint, "localhost", "127.0.0.1")
-	// os.Setenv("DB_HOST_local", dbEndpoint)
-	// os.Setenv("DB_HOST_docker", dbEndpoint)
-
-	// redisEndpoint = strings.ReplaceAll(redisEndpoint, "localhost", "127.0.0.1") // fixed dial tcp: lookup localhost: i/o timeout error
-	// os.Setenv("REDIS_local", redisEndpoint)
-	// os.Setenv("REDIS_docker", redisEndpoint)
-	// fmt.Printf("Redis: %s | Redpanda: %s | DB: %s\n", redisEndpoint, brokerAddress, dbEndpoint)
-
 	brokerAddress = forceIPv4(brokerAddress)
 	os.Setenv("KAFKA_BROKER_HOST_local", brokerAddress)
 	os.Setenv("KAFKA_BROKER_HOST_docker", brokerAddress)
@@ -142,16 +139,9 @@ func TestIntegrationPipeline(t *testing.T) {
 	redisEndpoint = forceIPv4(redisEndpoint)
 	os.Setenv("REDIS_local", redisEndpoint)
 	os.Setenv("REDIS_docker", redisEndpoint)
-	fmt.Printf("Redis: %s | Redpanda: %s | DB: %s\n", redisEndpoint, brokerAddress, dbEndpoint)
+	//fmt.Printf("Redis: %s | Redpanda: %s | DB: %s\n", redisEndpoint, brokerAddress, dbEndpoint)
 
 	go func() {
-		//print the current working directory here
-		// wd, err := os.Getwd()
-		// if err != nil {
-		// 	fmt.Println("Error getting working directory:", err)
-		// } else {
-		// 	fmt.Println("Current working directory:", wd)
-		// }
 		err = api.RunAPI(ctx, "file://../migrations")
 		// We can't use require.NoError inside a goroutine easily, so we just log it
 		if err != nil {
@@ -159,12 +149,12 @@ func TestIntegrationPipeline(t *testing.T) {
 		}
 	}()
 
-	// go func() {
-	// 	err = insertionworker.InsertionWorker(ctx)
-	// 	if err != nil {
-	// 		t.Logf("InsertionWorker stopped: %v", err)
-	// 	}
-	// }()
+	go func() {
+		err = insertionWorker.InsertionWorker(ctx)
+		if err != nil {
+			t.Logf("InsertionWorker stopped: %v", err)
+		}
+	}()
 
 	go func() {
 		err = reservationWorker.ReservationWorker(ctx)
@@ -173,8 +163,16 @@ func TestIntegrationPipeline(t *testing.T) {
 		}
 	}()
 
-	// Give the API time to boot
-	time.Sleep(4 * time.Second)
+	// Give the API time to boot dynamically (waits up to 10 seconds, checks every 100ms)
+	require.Eventually(t, func() bool {
+		// We just make a dummy request to see if the port is open
+		resp, err := http.Get("http://localhost:8080/")
+		if err != nil {
+			return false // "connection refused" -> server not up yet
+		}
+		resp.Body.Close()
+		return true // Connection succeeded, Gin is running!
+	}, 10*time.Second, 100*time.Millisecond, "API server did not start in time")
 
 	//Run possible test cases
 	//Running this test case first, matters
@@ -188,21 +186,30 @@ func TestIntegrationPipeline(t *testing.T) {
 	//post request followed by get request
 	t.Run("POST request and GET status request", func(t *testing.T) {
 		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"}`
+
+		var requestData map[string]string
+		err = json.Unmarshal([]byte(body), &requestData)
+		require.NoError(t, err)
+
+		//We need this to check the database insertion
+		phoneUUID := requestData["phoneUUID"]
+		userUUID := requestData["userUUID"]
+
 		resp, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body)))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 
-		bodyBytes, err := io.ReadAll(resp.Body)
+		buyRespBody, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 
-		var result map[string]string
-		err = json.Unmarshal(bodyBytes, &result)
+		var buyResponse map[string]string
+		err = json.Unmarshal(buyRespBody, &buyResponse)
 		require.NoError(t, err)
 
 		// {"ticketUUID": x, "status":y}
-		require.Equal(t, "PENDING", result["status"])
-		require.NotEmpty(t, result["ticketUUID"])
+		require.Equal(t, "PENDING", buyResponse["status"])
+		require.NotEmpty(t, buyResponse["ticketUUID"])
 
 		/*
 			Because your workers are running in the background via Kafka,
@@ -210,20 +217,35 @@ func TestIntegrationPipeline(t *testing.T) {
 			You have to write a small polling loop (or a time.Sleep for now)
 			to give the worker a few milliseconds to process the Kafka message.
 		*/
-		time.Sleep(12 * time.Second)
+		ticketUUID := buyResponse["ticketUUID"]
 
-		resp, err = http.Get(fmt.Sprintf("http://localhost:8080/status/%s", result["ticketUUID"]))
+		// require.Eventually will run this function every 500ms for up to 15 seconds.
+		// As soon as it returns true, the test passes and moves on instantly!
+		require.Eventually(t, func() bool {
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID))
+			if err != nil {
+				return false // Network error, try again on the next tick
+			}
+			defer resp.Body.Close()
 
-		var result2 map[string]string
-		bodyBytes2, err := io.ReadAll(resp.Body)
-		require.NoError(t, err)
-		err = json.Unmarshal(bodyBytes2, &result2)
-		require.NoError(t, err)
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
 
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		require.Equal(t, http.StatusOK, resp.StatusCode)
-		require.Equal(t, "SUCCESSFUL_RESERVATION", result2["status"])
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == "SUCCESSFUL_RESERVATION"
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status to become SUCCESSFUL_RESERVATION within 15 seconds")
 
 		//----TEST IN REDIS---
 		host, err := redisC.Host(ctx)
@@ -239,6 +261,22 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "9", val)
+
+		//--TEST IF INSERTION HAPPENS
+		// 1. Declare variables to hold the data we read from the database
+		var dbPhoneUUID, dbUserUUID, dbStatus string
+
+		// 2. Query the database using the ticketUUID, and scan the results into our variables
+		err = db.QueryRow(
+			"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+			ticketUUID,
+		).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+		require.NoError(t, err) // Fails the test if the row doesn't exist or query fails
+
+		// 3. Verify the database values match the values from our HTTP request
+		require.Equal(t, phoneUUID, dbPhoneUUID)
+		require.Equal(t, userUUID, dbUserUUID)
+		require.Equal(t, "RESERVED", dbStatus)
 
 	})
 
