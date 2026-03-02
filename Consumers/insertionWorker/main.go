@@ -12,7 +12,7 @@ import (
 func main() {
 	err := godotenv.Load("../.env")
 	if err != nil {
-		panic(err)
+		log.Println("No .env file found, relying on environment variables")
 	}
 
 	if err := worker.InsertionWorker(context.Background()); err != nil {
