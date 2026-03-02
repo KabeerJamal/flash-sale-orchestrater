@@ -5,7 +5,7 @@ WORKDIR /app
 COPY go.mod go.sum /app
 RUN go mod download
 
-COPY ./Consumers /app
+COPY ./Consumers /app/Consumers
 
 
 ## FOR PRODUCTION DO MULTI STAGE
