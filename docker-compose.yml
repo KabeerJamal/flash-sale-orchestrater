@@ -53,10 +53,11 @@ services:
       context: .
       dockerfile: Dockerfile 
     volumes:
-      - ./Consumers:/app      # live hot-reload
+      - ./Consumers:/app/Consumers     # live hot-reload
       - ./go.mod:/app/go.mod       # Mounts the specific file
       - ./go.sum:/app/go.sum       # Mounts the specific file
-    command: go run ./reservationWorker
+    command:  go run ./Consumers/reservationWorker
+    #command: tail -f /dev/null
     deploy:
       replicas: 3
 
@@ -69,14 +70,14 @@ services:
       context: .
       dockerfile: Dockerfile 
     volumes:
-      - ./Consumers:/app
-      - ./go.mod:/app/go.mod      
-      - ./go.sum:/app/go.sum           
-    command: go run ./insertionWorker
+      - ./Consumers:/app/Consumers     # live hot-reload
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file   
+    command: go run ./Consumers/insertionWorker
     deploy:
       replicas: 3
 
-  consumerC:
+  paymentWorker:
     image: flash-sale-orchestrater-consumerc
     env_file:
       - ./.env
@@ -84,27 +85,27 @@ services:
       context: .
       dockerfile: Dockerfile  
     volumes:
-      - ./Consumers:/app
+      - ./Consumers:/app/Consumers
       - ./go.mod:/app/go.mod     
       - ./go.sum:/app/go.sum      
-    command: go run ./consumerC
+    command: go run ./Consumers/paymentWorker
     deploy:
       replicas: 3
 
-  consumerD:
-    image: flash-sale-orchestrater-consumerd
-    env_file:
-      - ./.env
-    build:
-      context: .
-      dockerfile: Dockerfile   
-    volumes:
-      - ./Consumers:/app
-      - ./go.mod:/app/go.mod       
-      - ./go.sum:/app/go.sum           
-    command: go run ./consumerD
-    deploy:
-      replicas: 3
+  # consumerD:
+  #   image: flash-sale-orchestrater-consumerd
+  #   env_file:
+  #     - ./.env
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile   
+  #   volumes:
+  #     - ./Consumers:/app
+  #     - ./go.mod:/app/go.mod       
+  #     - ./go.sum:/app/go.sum           
+  #   command: go run ./consumerD
+  #   deploy:
+  #     replicas: 3
 
   #----FOR PRODUCTION
   # consumerA:
