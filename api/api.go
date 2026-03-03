@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	producer "myproject/Producer"
 	"net/http"
@@ -75,6 +76,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	r := gin.Default()
 
 	reservationWriter := createWriter(kafkaBrokerAddress, "Reservations")
+	paymentWriter := createWriter(kafkaBrokerAddress, "Payment")
 
 	r.POST("/buy-request", func(c *gin.Context) {
 		var body map[string]string
@@ -116,6 +118,51 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": resp})
 
 		//its frontend duty to keep in polling until it recieves a certain response
+	})
+
+	//get stripe webhook api request
+	//write to kafka
+	//payment reads from kafka
+	//whsec_ff38d757499e475d599e089e9cf8100d9c46fe5b6b94f29917a8c8db7a24bdf3
+	r.POST("/webhook", func(c *gin.Context) {
+		endpointSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+
+		//give me raw bytes of this request
+		payload, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+
+		sigHeader := c.GetHeader("Stripe-Signature")
+		if sigHeader == "" {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+
+		//event contains everything Stripe sent about that event.
+		event, err := webhook.ConstructEventWithOptions(
+			payload,
+			sigHeader,
+			endpointSecret,
+			webhook.ConstructEventOptions{
+				IgnoreAPIVersionMismatch: true,
+			},
+		)
+		if err != nil {
+			c.AbortWithStatus(http.StatusBadRequest) // signature check failed
+			return
+		}
+		b, err := json.Marshal(event.Data.Object)
+		if err != nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+
+		go producer.StartProducer(paymentWriter, "userIdBroski", b)
+		//sends HTTP 200 OK back to Stripe.
+		c.Status(http.StatusOK)
+
 	})
 
 	/*r.Run() is an infinite loop. It completely ignores the ctx context.
