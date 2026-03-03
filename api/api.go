@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	producer "myproject/Producer"
@@ -14,6 +15,8 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/segmentio/kafka-go"
+	"github.com/stripe/stripe-go/v78/webhook"
 )
 
 /*
@@ -71,6 +74,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	//browser sends a request with request body data
 	r := gin.Default()
 
+	reservationWriter := createWriter(kafkaBrokerAddress, "Reservations")
+
 	r.POST("/buy-request", func(c *gin.Context) {
 		var body map[string]string
 		c.BindJSON(&body)
@@ -79,7 +84,9 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		ticketUUID := uuid.New().String()
 		body["ticketUUID"] = ticketUUID
 
-		go producer.StartProducer(kafkaBrokerAddress, "Reservations", body)
+		b, _ := json.Marshal(body)
+
+		go producer.StartProducer(reservationWriter, ticketUUID, b)
 
 		//put ticketUUID and status in redis
 		rdb.Set(context.Background(), ticketUUID, "PENDING", 0).Err()
@@ -132,4 +139,14 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	<-ctx.Done()
 	log.Println("Shutting down API...")
 	return srv.Shutdown(context.Background())
+}
+
+func createWriter(kafkaBrokerAddress string, topic string) *kafka.Writer {
+	w := kafka.NewWriter(kafka.WriterConfig{
+		Brokers: []string{kafkaBrokerAddress},
+		Topic:   topic,
+		//Balancer: &kafka.LeastBytes{},
+		Balancer: &kafka.Hash{},
+	})
+	return w
 }
