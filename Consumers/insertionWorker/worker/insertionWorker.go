@@ -87,6 +87,7 @@ func InsertionWorker(ctx context.Context) error {
 		}
 		//---TEMP CODE END---
 
+		//on conflict do nothing is basiaclly idempotency check
 		_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data["ticketUUID"], data["phoneUUID"], data["userUUID"], "RESERVED")
 		if err != nil {
 			return err
