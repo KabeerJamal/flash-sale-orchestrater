@@ -226,3 +226,70 @@ func convertToBytes(data any) ([]byte, error) {
 	return json.Marshal(data)
 }
 
+func startTimer(ctx context.Context, rdb *redis.Client, memberData string) error {
+	expireTime := float64(time.Now().Add(5 * time.Minute).Unix())
+	err := rdb.ZAdd(ctx, "flash_sale_timers", redis.Z{
+		Score:  expireTime,
+		Member: memberData, // The data you want to retrieve later
+	}).Err()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledWriter *kafka.Writer) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			time.Sleep(500 * time.Millisecond)
+			currentTime := float64(time.Now().Unix())
+			list, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+				Key:     "flash_sale_timers",
+				Start:   "-inf",
+				Stop:    fmt.Sprintf("%f", currentTime),
+				ByScore: true,
+			}).Result()
+
+			if err != nil {
+				log.Println(err)
+				time.Sleep(time.Second)
+				continue
+			}
+			if len(list) != 0 {
+				//get the list
+				for _, memberString := range list {
+					//create a payment ,message with everything null, but ticket id phone uuid, status and user uuid filled
+					var paymentMessage PaymentEvent
+					parts := strings.Split(memberString, "|")
+					if len(parts) != 3 {
+						continue // safe fallback
+					}
+
+					ticketUUID := parts[0]
+					phoneUUID := parts[1]
+					userUUID := parts[2]
+
+					paymentMessage = PaymentEvent{
+						TicketUUID: ticketUUID,
+						PhoneUUID:  phoneUUID,
+						UserUUID:   userUUID,
+						Status:     "failed", // because the timer expired
+					}
+					paymentMessageByte, err := convertToBytes(paymentMessage)
+					if err != nil {
+						continue
+					}
+
+					go producer.StartProducer(paymentCancelledWriter, ticketUUID, paymentMessageByte)
+					rdb.ZRem(ctx, "flash_sale_timers", memberString) //remove the ticket
+
+				}
+				// call the start producer function on each of them
+			}
+		}
+	}
+
+}
