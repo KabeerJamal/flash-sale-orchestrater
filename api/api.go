@@ -219,6 +219,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
 			}
+			//idempotency check, doesnt cover all cases
+			rdb.Get(ctx, stripeData.TicketUUID)
 
 			if status, ok := event.Data.Object["payment_status"].(string); ok && status == "paid" {
 				go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
