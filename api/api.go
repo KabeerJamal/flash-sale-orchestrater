@@ -9,6 +9,8 @@ import (
 	producer "myproject/Producer"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-migrate/migrate/v4"
@@ -17,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
+	"github.com/stripe/stripe-go/v75"
+	"github.com/stripe/stripe-go/v75/checkout/session"
 	"github.com/stripe/stripe-go/v78/webhook"
 )
 
@@ -33,6 +37,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	dbname := os.Getenv("POSTGRES_DB")
 	host := os.Getenv("DB_HOST_local")
 
+	stripe.Key = os.Getenv("STRIPE_SECRET_KEY")
+
 	kafkaBrokerAddress := os.Getenv("KAFKA_BROKER_HOST_local")
 	redisAddress := os.Getenv("REDIS_local")
 
@@ -42,6 +48,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		DB:       0,  // use default DB
 	})
 	defer rdb.Close()
+	paymentCancelledWriter := createWriter(kafkaBrokerAddress, "Payment-Failed")
+	go pollExpiredTimers(ctx, rdb, paymentCancelledWriter)
 
 	// prefill it in redis (POTENTIAL ERROR, if main shuts down and runs again, refill happens even when not supposed to happen)
 	_, err := rdb.Set(context.Background(), "reservation", 10, 0).Result()
@@ -54,14 +62,6 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		user, pass, host, dbname,
 	)
 
-	//---APPLYING MIGRATION---
-	// log.Printf("DB CONN STR: %s", connStr)
-	// wd, err := os.Getwd()
-	// if err != nil {
-	// 	fmt.Println("Error getting working directory:", err)
-	// } else {
-	// 	fmt.Println("Current working directory:", wd)
-	// }
 	m, err := migrate.New(migrationURL, connStr)
 
 	if err != nil {
@@ -203,15 +203,40 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 			c.AbortWithStatus(http.StatusBadRequest) // signature check failed
 			return
 		}
-		b, err := json.Marshal(event.Data.Object)
+
+		//stripe sends multiple api calls of differnet even types. only the event type
+		//"checkout.session.completed contains the metadata"
+		switch event.Type {
+		case "checkout.session.completed", "checkout.session.async_payment_completed":
+			//TODO:Idempotency check, update redis here too
+			stripeData, err := filterStripeData(event.Data.Object)
 		if err != nil {
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
+			stripeDataBytes, err := convertToBytes(stripeData)
+			if err != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
 
-		go producer.StartProducer(paymentWriter, "userIdBroski", b)
-		//sends HTTP 200 OK back to Stripe.
+			if status, ok := event.Data.Object["payment_status"].(string); ok && status == "paid" {
+				go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
+			}
 		c.Status(http.StatusOK)
+
+		case "checkout.session.expired":
+			//TODO:idempotency check!!, update redis here too
+			//send same request but payment status is not paid now(need to check). might need to filter stripe data
+
+		case "checkout.session.async_payment_failed":
+			//TODO: idempotency check!!, update redis here too
+			//send same request but payment status is not paid now(need to check). might need to filter stripe data
+		default:
+			// Ignore other events safely
+			c.Status(http.StatusOK)
+			return
+		}
 
 	})
 
