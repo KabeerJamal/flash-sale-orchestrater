@@ -197,3 +197,32 @@ func createWriter(kafkaBrokerAddress string, topic string) *kafka.Writer {
 	})
 	return w
 }
+
+type PaymentEvent struct {
+	TicketUUID      string
+	PhoneUUID       string
+	UserUUID        string
+	PaymentIntentID string
+	Amount          int64
+	Currency        string
+	Status          string
+}
+
+func filterStripeData(data map[string]interface{}) (PaymentEvent, error) {
+	var filteredData PaymentEvent
+
+	filteredData.TicketUUID = data["metadata"].(map[string]interface{})["ticketUUID"].(string)
+	filteredData.PhoneUUID = data["metadata"].(map[string]interface{})["phoneUUID"].(string)
+	filteredData.UserUUID = data["metadata"].(map[string]interface{})["userUUID"].(string)
+	filteredData.PaymentIntentID = data["id"].(string)
+	filteredData.Amount = int64(data["amount_total"].(float64))
+	filteredData.Currency = data["currency"].(string)
+	filteredData.Status = data["payment_status"].(string)
+
+	return filteredData, nil
+}
+
+func convertToBytes(data any) ([]byte, error) {
+	return json.Marshal(data)
+}
+
