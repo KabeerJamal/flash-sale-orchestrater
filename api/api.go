@@ -334,9 +334,15 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 				continue
 			}
 			if len(list) != 0 {
+
 				//get the list
 				for _, memberString := range list {
+					// .Val() returns the number of items deleted (1 if success, 0 if another worker beat us to it)
+					removed := rdb.ZRem(ctx, "flash_sale_timers", memberString).Val()
+
 					//create a payment ,message with everything null, but ticket id phone uuid, status and user uuid filled
+
+					if removed > 0 {
 					var paymentMessage PaymentEvent
 					parts := strings.Split(memberString, "|")
 					if len(parts) != 3 {
@@ -359,10 +365,10 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 					}
 
 					go producer.StartProducer(paymentCancelledWriter, ticketUUID, paymentMessageByte)
-					rdb.ZRem(ctx, "flash_sale_timers", memberString) //remove the ticket
+
+					}
 
 				}
-				// call the start producer function on each of them
 			}
 		}
 	}
