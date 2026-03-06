@@ -321,7 +321,7 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 		case <-ctx.Done():
 			return nil
 		default:
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond) //added timer here so CPU is not busy 100% of the time
 			currentTime := float64(time.Now().Unix())
 			list, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
 				Key:     "flash_sale_timers",
