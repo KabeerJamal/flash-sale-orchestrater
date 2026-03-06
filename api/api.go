@@ -120,10 +120,60 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		//its frontend duty to keep in polling until it recieves a certain response
 	})
 
+	//in this function you create a stripe checkout session and attach to it metadata which will be needed when
+	//stripe sends webhook upon successful payment
+	r.POST("/pay", func(c *gin.Context) {
+		//body has ticketUUID, userUUID, phoneUUID
+		var body map[string]string
+		if err := c.BindJSON(&body); err != nil {
+			log.Fatal(err)
+			return // Handle error
+		}
+
+		//get url from checkoutsession and return it as response
+		params := &stripe.CheckoutSessionParams{
+			// ... (Add LineItems, Mode, SuccessURL, CancelURL) ...
+			Mode:       stripe.String(string(stripe.CheckoutSessionModePayment)),
+			SuccessURL: stripe.String("https://example.com/success"), //TODO:update this
+			CancelURL:  stripe.String("https://example.com/cancel"),  //TODO:update this
+			LineItems: []*stripe.CheckoutSessionLineItemParams{
+				{
+					PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
+						Currency:   stripe.String("usd"),
+						UnitAmount: stripe.Int64(5000),
+						ProductData: &stripe.CheckoutSessionLineItemPriceDataProductDataParams{
+							Name: stripe.String(body["phoneUUID"]), // Or a real product name
+						},
+					},
+					Quantity: stripe.Int64(1),
+				},
+			},
+			Metadata: map[string]string{
+				"ticketUUID": body["ticketUUID"],
+				"userUUID":   body["userUUID"],
+				"phoneUUID":  body["phoneUUID"],
+			},
+			ExpiresAt: stripe.Int64(time.Now().Add(30 * time.Minute).Unix()),
+		}
+		s, err := session.New(params) //stripe api call
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+
+		//call a function which adds ticket uuid to the ZSET
+		memberData := body["ticketUUID"] + "|" + body["userUUID"] + "|" + body["phoneUUID"]
+		startTimer(ctx, rdb, memberData)
+
+		//create a function which polls, and if it finds something, it creeates a topic which writes to kafka worker
+
+		c.JSON(200, gin.H{"url": s.URL})
+
+	})
+
 	//get stripe webhook api request
 	//write to kafka
 	//payment reads from kafka
-	//whsec_ff38d757499e475d599e089e9cf8100d9c46fe5b6b94f29917a8c8db7a24bdf3
 	r.POST("/webhook", func(c *gin.Context) {
 		endpointSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
 
