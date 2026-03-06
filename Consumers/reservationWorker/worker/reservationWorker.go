@@ -43,6 +43,7 @@ func ReservationWorker(ctx context.Context) error {
 	// 2. Consume forever
 	for {
 		msg, err := r.ReadMessage(ctx) //this is blocking
+		//TODO: Idempotency check
 		if err != nil {
 			log.Println("Error while reading:", err)
 			break
@@ -66,7 +67,6 @@ func ReservationWorker(ctx context.Context) error {
 			return redis.call("DECR", KEYS[1])
 		`) // script is basically -2,-1 or remaining stock after decrement
 
-		//TODO
 		res, err := script.Run(ctx, rdb, []string{"reservation"}).Result()
 		if err != nil {
 			log.Printf("Some problem with redis database: %v", err)
@@ -74,6 +74,7 @@ func ReservationWorker(ctx context.Context) error {
 		}
 
 		// Redis returns numbers as int64 through go-redis
+		//TODO: I think this code will break if we have bad input data
 		n := res.(int64)
 		var data map[string]string
 
@@ -92,9 +93,9 @@ func ReservationWorker(ctx context.Context) error {
 			//polling code implement
 			rdb.Set(ctx, ticketUUID, "WAITING_LIST", 0).Err()
 		} else {
-			//TODO: send a message topic reservation successful, with key and value.
+
 			err = w.WriteMessages(
-				context.Background(),
+				ctx,
 
 				kafka.Message{
 					Key:   msg.Key,
