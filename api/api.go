@@ -359,7 +359,7 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 						TicketUUID: ticketUUID,
 						PhoneUUID:  phoneUUID,
 						UserUUID:   userUUID,
-						Status:     "failed", // because the timer expired
+							Status:     "unpaid", // because the timer expired
 					}
 					paymentMessageByte, err := convertToBytes(paymentMessage)
 					if err != nil {
