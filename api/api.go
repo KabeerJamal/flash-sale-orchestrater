@@ -199,6 +199,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 				IgnoreAPIVersionMismatch: true,
 			},
 		)
+		log.Println("event type:", event.Type)
 		if err != nil {
 			c.AbortWithStatus(http.StatusBadRequest) // signature check failed
 			return
@@ -208,24 +209,30 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		//"checkout.session.completed contains the metadata"
 		switch event.Type {
 		case "checkout.session.completed", "checkout.session.async_payment_completed":
-			//TODO:Idempotency check, update redis here too
 			stripeData, err := filterStripeData(event.Data.Object)
-		if err != nil {
-			c.AbortWithStatus(http.StatusBadRequest)
-			return
-		}
+			if err != nil {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
 			stripeDataBytes, err := convertToBytes(stripeData)
 			if err != nil {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
 			}
+			//Idempotency Check
+			val, err := rdb.Get(ctx, stripeData.TicketUUID).Result()
+			if err == nil && val == "PAID" {
+				//already processed this exact payment
+				c.Status(http.StatusOK) // Tell Stripe "thanks, we got it"
+				return
+			}
+
 			if _, ok := event.Data.Object["payment_status"].(string); ok {
 				go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
 			}
-		c.Status(http.StatusOK)
+			c.Status(http.StatusOK)
 
 		case "checkout.session.expired":
-			//TODO:idempotency check!!, update redis here too
 			//send same request but payment status is not paid now(need to check). might need to filter stripe data
 			stripeData, err := filterStripeData(event.Data.Object)
 			if err != nil {
@@ -237,6 +244,13 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
 			}
+			//idempotency check, doesnt cover all cases
+			val, err := rdb.Get(ctx, stripeData.TicketUUID).Result()
+			if err == nil && val == "FAILED" {
+				//already processed this exact payment
+				c.Status(http.StatusOK) // Tell Stripe "thanks, we got it"
+				return
+			}
 			if _, ok := event.Data.Object["payment_status"].(string); ok {
 				go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
 				c.Status(http.StatusOK)
@@ -244,6 +258,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 			c.Status(http.StatusOK)
 
 		case "checkout.session.async_payment_failed":
+			//send same request but payment status is not paid now. might need to filter stripe data
 			stripeData, err := filterStripeData(event.Data.Object)
 			if err != nil {
 				c.AbortWithStatus(http.StatusBadRequest)
@@ -252,6 +267,14 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 			stripeDataBytes, err := convertToBytes(stripeData)
 			if err != nil {
 				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+			//idempotency check, doesnt cover all cases
+			//idempotency check, doesnt cover all cases
+			val, err := rdb.Get(ctx, stripeData.TicketUUID).Result()
+			if err == nil && val == "FAILED" {
+				//already processed this exact payment
+				c.Status(http.StatusOK) // Tell Stripe "thanks, we got it"
 				return
 			}
 			go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
@@ -367,28 +390,28 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 					//create a payment ,message with everything null, but ticket id phone uuid, status and user uuid filled
 
 					if removed > 0 {
-					var paymentMessage PaymentEvent
-					parts := strings.Split(memberString, "|")
-					if len(parts) != 3 {
-						continue // safe fallback
-					}
+						var paymentMessage PaymentEvent
+						parts := strings.Split(memberString, "|")
+						if len(parts) != 3 {
+							continue // safe fallback
+						}
 
-					ticketUUID := parts[0]
-					phoneUUID := parts[1]
-					userUUID := parts[2]
+						ticketUUID := parts[0]
+						phoneUUID := parts[1]
+						userUUID := parts[2]
 
-					paymentMessage = PaymentEvent{
-						TicketUUID: ticketUUID,
-						PhoneUUID:  phoneUUID,
-						UserUUID:   userUUID,
+						paymentMessage = PaymentEvent{
+							TicketUUID: ticketUUID,
+							PhoneUUID:  phoneUUID,
+							UserUUID:   userUUID,
 							Status:     "unpaid", // because the timer expired
-					}
-					paymentMessageByte, err := convertToBytes(paymentMessage)
-					if err != nil {
-						continue
-					}
+						}
+						paymentMessageByte, err := convertToBytes(paymentMessage)
+						if err != nil {
+							continue
+						}
 
-					go producer.StartProducer(paymentCancelledWriter, ticketUUID, paymentMessageByte)
+						go producer.StartProducer(paymentCancelledWriter, ticketUUID, paymentMessageByte)
 
 					}
 
