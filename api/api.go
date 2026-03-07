@@ -276,13 +276,13 @@ func createWriter(kafkaBrokerAddress string, topic string) *kafka.Writer {
 }
 
 type PaymentEvent struct {
-	TicketUUID      string
-	PhoneUUID       string
-	UserUUID        string
-	PaymentIntentID string
-	Amount          int64
-	Currency        string
-	Status          string
+	TicketUUID      string `json:"ticketUUID"`
+	PhoneUUID       string `json:"phoneUUID"`
+	UserUUID        string `json:"userUUID"`
+	PaymentIntentID string `json:"paymentIntentID"`
+	Amount          int64  `json:"amount"`
+	Currency        string `json:"currency"`
+	Status          string `json:"status"`
 }
 
 func filterStripeData(data map[string]interface{}) (PaymentEvent, error) {
