@@ -10,7 +10,7 @@ import (
 	"log"
 	"net"
 
-	insertionWorker "myproject/Consumers/insertionWorker/worker"
+	reservationPersistenceWorker "myproject/Consumers/reservationPersistenceWorker/worker"
 	reservationWorker "myproject/Consumers/reservationWorker/worker"
 	"myproject/api"
 	"net/http"
@@ -150,7 +150,7 @@ func TestIntegrationPipeline(t *testing.T) {
 	}()
 
 	go func() {
-		err = insertionWorker.InsertionWorker(ctx)
+		err = reservationPersistenceWorker.ReservationPersistenceWorker(ctx)
 		if err != nil {
 			t.Logf("InsertionWorker stopped: %v", err)
 		}
