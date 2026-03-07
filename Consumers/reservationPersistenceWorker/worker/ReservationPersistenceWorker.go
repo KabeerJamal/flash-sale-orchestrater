@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/segmentio/kafka-go"
@@ -117,6 +118,42 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			var event PaymentEvent
 			json.Unmarshal(msg.Value, &event)
+
+			// --- Retry Logic for Race Condition ---
+			maxRetries := 5
+			success := false
+
+			for i := 1; i <= maxRetries; i++ {
+				// 1. Attempt the update
+				res, err := db.Exec("UPDATE RESERVATIONS SET status = $1 WHERE ticketID = $2", "PAID", event.TicketUUID)
+
+				if err != nil {
+					log.Printf("Attempt %d: DB query error: %v\n", i, err)
+				} else {
+					// 2. Check if the row actually existed
+					rowsAffected, err := res.RowsAffected()
+					if err == nil && rowsAffected > 0 {
+						fmt.Printf("Success! Ticket %s updated to PAID on attempt %d\n", event.TicketUUID, i)
+						success = true
+						break // It worked! Break out of the retry loop.
+					}
+
+					log.Printf("Attempt %d: Ticket %s not found yet. Waiting for insertion...\n", i, event.TicketUUID)
+				}
+
+				// 3. If we haven't reached max retries yet, sleep before trying again
+				if i < maxRetries {
+					time.Sleep(500 * time.Millisecond)
+				}
+			}
+
+			// 4. If we exhausted all 5 attempts and it still failed
+			if !success {
+				log.Printf("CRITICAL ERROR: Could not update payment for ticket %s after %d attempts. Dropping message.\n", event.TicketUUID, maxRetries)
+				continue // Skip to the next Kafka message so the worker doesn't die
+			}
+
+			// If success == true, publish the "reservation_confirmed" event for the emailer
 
 		}
 	}()
