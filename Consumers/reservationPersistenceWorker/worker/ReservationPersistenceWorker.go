@@ -47,12 +47,14 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 		Topic:   "Reservation-successful",
 		GroupID: "InsertionToSQL-group",
 	})
+	defer r.Close()
 
 	updateReservationReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress},
 		Topic:   "Payment-successful",
 		GroupID: "UpdateToSQL-group",
 	})
+	defer updateReservationReader.Close()
 
 	fmt.Println("Consumer B started")
 
@@ -66,7 +68,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			if err != nil {
 				log.Println("Error while reading:", err)
-				return
+				continue
 			}
 
 			var data map[string]string
@@ -74,7 +76,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			err = json.Unmarshal(msg.Value, &data)
 			if err != nil {
 				log.Println(err)
-				return
+				continue
 			}
 
 			// 3. Print message
@@ -84,18 +86,18 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			//----TEMP CODE---
 			_, err = db.Exec("INSERT INTO USERS (userUUID, userName) VALUES ($1, $2) ON CONFLICT (userUUID) DO NOTHING", data["userUUID"], "Messi")
 			if err != nil {
-				return
+				continue
 			}
 			_, err = db.Exec("INSERT INTO PHONES (phoneUUID, phoneName) VALUES ($1, $2) ON CONFLICT (phoneUUID) DO NOTHING", data["phoneUUID"], "Iphone")
 			if err != nil {
-				return
+				continue
 			}
 			//---TEMP CODE END---
 
 			//on conflict do nothing is basiaclly idempotency check
 			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data["ticketUUID"], data["phoneUUID"], data["userUUID"], "RESERVED")
 			if err != nil {
-				return
+				continue
 			}
 
 			fmt.Print("Things work fine")
