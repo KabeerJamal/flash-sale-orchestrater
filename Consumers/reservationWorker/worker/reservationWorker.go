@@ -52,6 +52,22 @@ func ReservationWorker(ctx context.Context) error {
 		// 3. Print message..
 		fmt.Printf("Received message: key=%s value=%s\n", string(msg.Key), string(msg.Value))
 
+		var data map[string]string
+
+		err = json.Unmarshal(msg.Value, &data)
+		if err != nil {
+			log.Println(err)
+			return err
+		}
+		ticketUUID := data["ticketUUID"]
+
+		// Idempotency Check
+		status, err := rdb.Get(ctx, ticketUUID).Result()
+		if err == nil && (status == "SUCCESSFUL_RESERVATION" || status == "WAITING_LIST") {
+			log.Printf("Duplicate message for ticket %s, skipping.\n", ticketUUID)
+			continue // Skip processing!
+		}
+
 		//You send message to two places, frontend(via redis) and backend(using redpanda)
 		// if reservation in redis is less than 10, do reservation in redis 10 - 1. Send message to kafka for new topic
 		script := redis.NewScript(`
@@ -76,15 +92,7 @@ func ReservationWorker(ctx context.Context) error {
 		// Redis returns numbers as int64 through go-redis
 		//TODO: I think this code will break if we have bad input data
 		n := res.(int64)
-		var data map[string]string
 
-		err = json.Unmarshal(msg.Value, &data)
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-
-		ticketUUID := data["ticketUUID"]
 		if n == -2 {
 			//error handling
 			log.Printf("Some problem with redis database")
