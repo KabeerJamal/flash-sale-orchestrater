@@ -57,6 +57,14 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	})
 	defer updateReservationReader.Close()
 
+	redisAddress := os.Getenv("REDIS_docker")
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddress,
+		Password: "",
+		DB:       0,
+	})
+	defer rdb.Close()
+
 	fmt.Println("Consumer B started")
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -134,7 +142,8 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 					if err == nil && rowsAffected > 0 {
 						fmt.Printf("Success! Ticket %s updated to PAID on attempt %d\n", event.TicketUUID, i)
 						success = true
-						break // It worked! Break out of the retry loop.
+						rdb.Set(ctx, event.TicketUUID, "PAID", 0).Err()
+						break //it worked, Break out of the retry loop.
 					}
 
 					log.Printf("Attempt %d: Ticket %s not found yet. Waiting for insertion...\n", i, event.TicketUUID)
