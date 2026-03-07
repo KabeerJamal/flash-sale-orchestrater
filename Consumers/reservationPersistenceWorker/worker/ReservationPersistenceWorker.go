@@ -106,7 +106,6 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	}()
 
 	go func() {
-		//race condition + idempotency check
 		for {
 			msg, err := updateReservationReader.ReadMessage(ctx)
 
@@ -125,7 +124,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			for i := 1; i <= maxRetries; i++ {
 				// 1. Attempt the update
-				res, err := db.Exec("UPDATE RESERVATIONS SET status = $1 WHERE ticketID = $2", "PAID", event.TicketUUID)
+				res, err := db.Exec("UPDATE RESERVATIONS SET status = $1 WHERE ticketID = $2 AND status != 'PAID'", "PAID", event.TicketUUID)
 
 				if err != nil {
 					log.Printf("Attempt %d: DB query error: %v\n", i, err)
