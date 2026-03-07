@@ -219,10 +219,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 				c.AbortWithStatus(http.StatusInternalServerError)
 				return
 			}
-			//idempotency check, doesnt cover all cases
-			rdb.Get(ctx, stripeData.TicketUUID)
-
-			if status, ok := event.Data.Object["payment_status"].(string); ok && status == "paid" {
+			if _, ok := event.Data.Object["payment_status"].(string); ok {
 				go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
 			}
 		c.Status(http.StatusOK)
@@ -230,10 +227,35 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		case "checkout.session.expired":
 			//TODO:idempotency check!!, update redis here too
 			//send same request but payment status is not paid now(need to check). might need to filter stripe data
+			stripeData, err := filterStripeData(event.Data.Object)
+			if err != nil {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			stripeDataBytes, err := convertToBytes(stripeData)
+			if err != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+			if _, ok := event.Data.Object["payment_status"].(string); ok {
+				go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
+				c.Status(http.StatusOK)
+			}
+			c.Status(http.StatusOK)
 
 		case "checkout.session.async_payment_failed":
-			//TODO: idempotency check!!, update redis here too
-			//send same request but payment status is not paid now(need to check). might need to filter stripe data
+			stripeData, err := filterStripeData(event.Data.Object)
+			if err != nil {
+				c.AbortWithStatus(http.StatusBadRequest)
+				return
+			}
+			stripeDataBytes, err := convertToBytes(stripeData)
+			if err != nil {
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+			go producer.StartProducer(paymentWriter, stripeData.TicketUUID, stripeDataBytes)
+			c.Status(http.StatusOK)
 		default:
 			// Ignore other events safely
 			c.Status(http.StatusOK)
