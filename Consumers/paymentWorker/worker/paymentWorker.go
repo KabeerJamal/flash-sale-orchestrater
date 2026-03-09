@@ -3,8 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/segmentio/kafka-go"
@@ -37,8 +36,6 @@ func PaymentWorker(ctx context.Context) error {
 	})
 	defer r.Close()
 
-	fmt.Println("Payment Worker started")
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -46,26 +43,35 @@ func PaymentWorker(ctx context.Context) error {
 		msg, err := r.ReadMessage(ctx)
 
 		if err != nil {
-			log.Println("Error while reading:", err)
+			slog.Error("Error while reading Kafka message", "error", err)
 			return err
 		}
 
 		// 3. Print message
-		fmt.Printf("Received message: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+		slog.Info("Received message",
+			"key", string(msg.Key),
+			"value", string(msg.Value),
+		)
 		//if success, send topic to insertion worker to update database
 		var paymentMessage PaymentEvent
 
 		//call a function which takes in msg.Value and returns paymentMessage
 		paymentMessage, err = convertToPaymentMessage(msg.Value)
 		if err != nil {
-			log.Fatal(err)
-			return err
+			slog.Error("Failed to convert message to PaymentEvent",
+				"error", err,
+				"raw_message", string(msg.Value),
+			)
+			continue
 		}
 
 		valueBytes, err := json.Marshal(paymentMessage)
 		if err != nil {
-			log.Fatal(err)
-			return err
+			slog.Error("Failed to marshal PaymentEvent",
+				"error", err,
+				"ticketUUID", paymentMessage.TicketUUID,
+			)
+			continue
 		}
 
 		if paymentMessage.Status == "paid" {

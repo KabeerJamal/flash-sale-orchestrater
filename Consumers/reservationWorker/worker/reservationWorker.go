@@ -3,8 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/redis/go-redis/v9"
@@ -40,23 +39,24 @@ func ReservationWorker(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 2. Consume forever
+	// consume forever
 	for {
 		msg, err := r.ReadMessage(ctx) //this is blocking
-		//TODO: Idempotency check
+
 		if err != nil {
-			log.Println("Error while reading:", err)
-			break
+			slog.Error("Error while reading message", "error", err)
+
+			return err
 		}
 
-		// 3. Print message..
-		fmt.Printf("Received message: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+		// print message..
+		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
 		var data map[string]string
 
 		err = json.Unmarshal(msg.Value, &data)
 		if err != nil {
-			log.Println(err)
+			slog.Error("Error unmarshaling JSON", "error", err)
 			return err
 		}
 		ticketUUID := data["ticketUUID"]
@@ -64,7 +64,7 @@ func ReservationWorker(ctx context.Context) error {
 		// Idempotency Check
 		status, err := rdb.Get(ctx, ticketUUID).Result()
 		if err == nil && (status == "SUCCESSFUL_RESERVATION" || status == "WAITING_LIST") {
-			log.Printf("Duplicate message for ticket %s, skipping.\n", ticketUUID)
+			slog.Info("Duplicate message for ticket, skipping", "ticketID", ticketUUID, "status", status)
 			continue // Skip processing!
 		}
 
@@ -85,7 +85,7 @@ func ReservationWorker(ctx context.Context) error {
 
 		res, err := script.Run(ctx, rdb, []string{"reservation"}).Result()
 		if err != nil {
-			log.Printf("Some problem with redis database: %v", err)
+			slog.Error("Some problem with redis database", "error", err)
 			return err
 		}
 
@@ -95,7 +95,7 @@ func ReservationWorker(ctx context.Context) error {
 
 		if n == -2 {
 			//error handling
-			log.Printf("Some problem with redis database")
+			slog.Error("Some problem with redis database")
 			return err
 		} else if n == -1 {
 			//TODO:
@@ -119,11 +119,17 @@ func ReservationWorker(ctx context.Context) error {
 				},
 			)
 			if err != nil {
-				log.Printf("failed to write message: %v", err)
+				slog.Error("failed to write message", "error", err)
 			}
 
 			//update redis too
-			rdb.Set(ctx, ticketUUID, "SUCCESSFUL_RESERVATION", 0).Err()
+			err = rdb.Set(ctx, ticketUUID, "SUCCESSFUL_RESERVATION", 0).Err()
+			if err != nil {
+				slog.Error("Failed to update reservation status in redis",
+					"ticketUUID", ticketUUID,
+					"error", err,
+				)
+			}
 		}
 
 	}

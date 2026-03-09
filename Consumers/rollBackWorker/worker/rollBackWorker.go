@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -43,7 +43,6 @@ func RollbackWorker(ctx context.Context) error {
 		GroupID: "Rollback-group",
 	})
 
-	fmt.Println("Consumer A started")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -51,18 +50,18 @@ func RollbackWorker(ctx context.Context) error {
 	for {
 		msg, err := r.ReadMessage(ctx) //this is blocking
 		if err != nil {
-			log.Println("Error while reading:", err)
-			continue
+			slog.Error("Error while reading message", "error", err)
+			return err
 		}
 
 		// Print message
-		fmt.Printf("Received message: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
 		// Unmarshal the message
 		var pm PaymentEvent
 		err = json.Unmarshal(msg.Value, &pm)
 		if err != nil {
-			log.Println("Error unmarshaling message:", err)
+			slog.Error("Error unmarshaling message", "error", err)
 			continue
 		}
 
@@ -75,7 +74,11 @@ func RollbackWorker(ctx context.Context) error {
 			res, err := db.Exec("DELETE FROM RESERVATIONS WHERE ticketID = $1", pm.TicketUUID)
 
 			if err != nil {
-				log.Printf("Attempt %d: DB query error: %v\n", i, err)
+				slog.Error("DB query error",
+					"attempt", i,
+					"ticketUUID", pm.TicketUUID,
+					"error", err,
+				)
 			} else {
 				// Check if a row was actually deleted
 				rowsAffected, _ := res.RowsAffected()
@@ -84,20 +87,25 @@ func RollbackWorker(ctx context.Context) error {
 					// 3. We successfully deleted the row! Increment the stock back safely.
 					err = rdb.Incr(ctx, "reservation").Err()
 					if err != nil {
-						log.Printf("Error incrementing stock for %s: %v\n", pm.TicketUUID, err)
+						slog.Error("Error incrementing stock",
+							"ticketUUID", pm.TicketUUID,
+							"error", err,
+						)
 					} else {
-						fmt.Printf("Success! Deleted %s and restored stock on attempt %d\n", pm.TicketUUID, i)
+						slog.Info("Successfully deleted reservation and restored stock",
+							"ticketUUID", pm.TicketUUID,
+							"attempt", i,
+						)
 					}
-
-					nextTicket := rdb.LPop(ctx, "waitlist_queue").Result()
-					if nextTicket != nil {
-						rdb.Set(ctx, nextTicket, "SUCCESSFUL_RESERVATION", 0)
 					}
 					success = true
 					break // It worked, break out of the retry loop
 				}
 
-				log.Printf("Attempt %d: Ticket %s not found. Waiting for insertion (or already deleted)...\n", i, pm.TicketUUID)
+				slog.Warn("Ticket not found, waiting for insertion or already deleted",
+					"attempt", i,
+					"ticketUUID", pm.TicketUUID,
+				)
 			}
 
 			// Sleep before trying again
@@ -107,13 +115,18 @@ func RollbackWorker(ctx context.Context) error {
 		}
 
 		if !success {
-			log.Printf("Finished retries for %s. Row was likely already deleted (duplicate message) or never inserted.\n", pm.TicketUUID)
+			slog.Warn("Finished retries; row was likely already deleted or never inserted",
+				"ticketUUID", pm.TicketUUID,
+			)
 		}
 
 		// Update the final status in Redis so the frontend knows it failed
 		err = rdb.Set(ctx, pm.TicketUUID, "FAILED", 0).Err()
 		if err != nil {
-			log.Printf("Error updating Redis status for %s: %v\n", pm.TicketUUID, err)
+			slog.Error("Error updating Redis status",
+				"ticketUUID", pm.TicketUUID,
+				"error", err,
+			)
 		}
 	}
 	return nil

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,16 +13,24 @@ import (
 )
 
 func main() {
+	opts := &slog.HandlerOptions{
+		AddSource: true, // This enables the file name and line number
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	slog.SetDefault(logger) // This makes 'logger' the global default
+
 	err := godotenv.Load("../.env")
 	if err != nil {
-		log.Println("No .env file found, relying on environment variables")
+		slog.Warn("No .env file found, relying on environment variables", "error", err)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if err := worker.ReservationPersistenceWorker(ctx); err != nil {
-		log.Fatal(err)
+		// Replace log.Fatal with slog.Error + os.Exit
+		slog.Error("Worker stopped with error", "error", err)
+		os.Exit(1)
 	}
 
 }

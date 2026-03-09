@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -29,13 +29,13 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	db, err := sql.Open("pgx", connStr)
 
 	if err != nil {
-		log.Print("DB connection not estbalished: ", err)
+		slog.Error("DB connection not established", "error", err)
 		return err
 	}
 
 	err = db.Ping()
 	if err != nil {
-		log.Println("DB Ping failed:", err)
+		slog.Error("DB Ping failed", "error", err)
 		return err
 	}
 
@@ -77,15 +77,15 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			msg, err := r.ReadMessage(ctx)
 
 			if err != nil {
-				log.Println("Error while reading:", err)
-				continue
+				slog.Error("Error while reading message", "error", err)
+				return
 			}
 
 			var data map[string]string
 
 			err = json.Unmarshal(msg.Value, &data)
 			if err != nil {
-				log.Println(err)
+				slog.Error("Error unmarshaling JSON", "error", err)
 				continue
 			}
 
@@ -119,10 +119,10 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			msg, err := updateReservationReader.ReadMessage(ctx)
 
 			if err != nil {
-				log.Println("Error while reading:", err)
+				slog.Error("Error while reading message", "error", err)
 				return
 			}
-			fmt.Printf("Received message in insertion Worker: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+			slog.Info("Received message in insertion Worker", "key", string(msg.Key), "value", string(msg.Value))
 
 			var event PaymentEvent
 			json.Unmarshal(msg.Value, &event)
@@ -136,17 +136,25 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 				res, err := db.Exec("UPDATE RESERVATIONS SET status = $1 WHERE ticketID = $2 AND status != 'PAID'", "PAID", event.TicketUUID)
 
 				if err != nil {
-					log.Printf("Attempt %d: DB query error: %v\n", i, err)
+					slog.Error("DB query error", "attempt", i, "error", err)
 				} else {
 					// 2. Check if the row actually existed
 					rowsAffected, err := res.RowsAffected()
 					if err == nil && rowsAffected > 0 {
-						fmt.Printf("Success! Ticket %s updated to PAID on attempt %d\n", event.TicketUUID, i)
+						slog.Info("Success! Ticket updated to PAID", "ticketID", event.TicketUUID, "attempt", i)
 						success = true
-						rdb.Set(ctx, event.TicketUUID, "PAID", 0).Err()
+						err = rdb.Set(ctx, event.TicketUUID, "PAID", 0).Err()
+						if err != nil {
+							slog.Error("failed to set redis key", "ticketID", event.TicketUUID, "error", err)
+							return
+						}
 
-						rdb.Incr(ctx, "total_paid").
-							totalPaid, err := rdb.Incr(ctx, "total_paid").Result()
+						totalPaid, err := rdb.Incr(ctx, "total_paid").Result()
+
+						if err != nil {
+							slog.Error("failed to increment total_paid", "error", err)
+							return
+						}
 
 						if totalPaid == 10 {
 							// Pass a fresh context so the background task doesn't die if the main worker shuts down.
@@ -156,7 +164,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 						break //it worked, Break out of the retry loop.
 					}
 
-					log.Printf("Attempt %d: Ticket %s not found yet. Waiting for insertion...\n", i, event.TicketUUID)
+					slog.Warn("Ticket not found yet. Waiting for insertion...", "ticketID", event.TicketUUID, "attempt", i)
 				}
 
 				// 3. If we haven't reached max retries yet, sleep before trying again
@@ -167,7 +175,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			// 4. If we exhausted all 5 attempts and it still failed
 			if !success {
-				log.Printf("CRITICAL ERROR: Could not update payment for ticket %s after %d attempts. Dropping message.\n", event.TicketUUID, maxRetries)
+				slog.Error("CRITICAL ERROR: Could not update payment for ticket. Dropping message.", "ticketID", event.TicketUUID, "maxRetries", maxRetries)
 				continue // Skip to the next Kafka message so the worker doesn't die
 			}
 
@@ -200,10 +208,13 @@ func soldOut(ctx context.Context, rdb *redis.Client) {
 		}
 
 		if err != nil {
-			log.Println("Redis error:", err)
+			slog.Error("Redis error during LPop", "error", err)
 			continue // Skip if there's a weird network error
 		}
 		rdb.Set(ctx, ticketUUID, "SOLD_OUT", 0).Err()
+		if err != nil {
+			slog.Error("Failed to set ticket as SOLD_OUT", "ticketID", ticketUUID, "error", err)
+		}
 
 	}
 }
