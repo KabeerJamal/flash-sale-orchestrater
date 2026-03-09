@@ -98,8 +98,16 @@ func ReservationWorker(ctx context.Context) error {
 			log.Printf("Some problem with redis database")
 			return err
 		} else if n == -1 {
-			//polling code implement
+			//TODO:
+			/*
+				Because Set and RPush are two separate network calls, if your worker crashes exactly after the Set but before the RPush:
+				The frontend will see "WAITING_LIST" and keep polling forever.
+				The user will never actually be in the waitlist_queue, so they will never get a ticket if one opens up.
+				For a practice project: It is fine to leave it as is.
+				For enterprise: You would wrap both commands inside a Redis Pipeline or a Lua script to make them execute atomically (all-or-nothing).
+			*/
 			rdb.Set(ctx, ticketUUID, "WAITING_LIST", 0).Err()
+			rdb.RPush(ctx, "waitlist_queue", ticketUUID)
 		} else {
 
 			err = w.WriteMessages(

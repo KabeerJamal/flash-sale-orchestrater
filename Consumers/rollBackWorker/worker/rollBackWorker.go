@@ -88,6 +88,11 @@ func RollbackWorker(ctx context.Context) error {
 					} else {
 						fmt.Printf("Success! Deleted %s and restored stock on attempt %d\n", pm.TicketUUID, i)
 					}
+
+					nextTicket := rdb.LPop(ctx, "waitlist_queue").Result()
+					if nextTicket != nil {
+						rdb.Set(ctx, nextTicket, "SUCCESSFUL_RESERVATION", 0)
+					}
 					success = true
 					break // It worked, break out of the retry loop
 				}

@@ -144,6 +144,15 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 						fmt.Printf("Success! Ticket %s updated to PAID on attempt %d\n", event.TicketUUID, i)
 						success = true
 						rdb.Set(ctx, event.TicketUUID, "PAID", 0).Err()
+
+						rdb.Incr(ctx, "total_paid").
+							totalPaid, err := rdb.Incr(ctx, "total_paid").Result()
+
+						if totalPaid == 10 {
+							// Pass a fresh context so the background task doesn't die if the main worker shuts down.
+							go soldOut(context.Background(), rdb)
+						}
+
 						break //it worked, Break out of the retry loop.
 					}
 
@@ -179,4 +188,22 @@ type PaymentEvent struct {
 	Amount          int64  `json:"amount"`
 	Currency        string `json:"currency"`
 	Status          string `json:"status"`
+}
+
+func soldOut(ctx context.Context, rdb *redis.Client) {
+
+	for {
+		ticketUUID, err := rdb.LPop(ctx, "waitlist_queue").Result()
+
+		if err == redis.Nil {
+			break // The list is completely empty, exit the loop
+		}
+
+		if err != nil {
+			log.Println("Redis error:", err)
+			continue // Skip if there's a weird network error
+		}
+		rdb.Set(ctx, ticketUUID, "SOLD_OUT", 0).Err()
+
+	}
 }
