@@ -97,6 +97,38 @@ func RollbackWorker(ctx context.Context) error {
 							"attempt", i,
 						)
 					}
+
+					/*
+						Wrong snippet:
+						nextTicket := rdb.LPop(ctx, "waitlist_queue").Result() if nextTicket != nil { rdb.Set(ctx, nextTicket, "SUCCESSFUL_RESERVATION", 0) }
+
+						The first snippet is **wrong** and won't even compile. Here is why:
+						1. `Result()` returns two values: the string (ticket UUID) and the error. Assigning it to just `nextTicket` causes a Go compiler error (`assignment mismatch: 1 variable but 2 values`).
+						2. In Go, a `string` can never be `nil`. So checking `if nextTicket != nil` is invalid.
+
+						**Your second snippet is 100% correct and production-ready.**
+
+						It perfectly handles:
+						1. Both return values `(nextTicket, err)`.
+						2. The specific `redis.Nil` case (which happens when `LPop` tries to pop from an empty list).
+						3. Any actual connection errors.
+						4. Catching the error on the subsequent `rdb.Set` command and logging it nicely with `slog`.
+
+						Use your second snippet exactly as you wrote it!
+					*/
+					nextTicket, err := rdb.LPop(ctx, "waitlist_queue").Result()
+					if err == redis.Nil {
+						// waitlist empty
+					} else if err != nil {
+						slog.Error("Error popping from waitlist queue", "error", err)
+					} else {
+						err = rdb.Set(ctx, nextTicket, "SUCCESSFUL_RESERVATION", 0).Err()
+						if err != nil {
+							slog.Error("Failed to update waitlist ticket status",
+								"ticketUUID", nextTicket,
+								"error", err,
+							)
+						}
 					}
 					success = true
 					break // It worked, break out of the retry loop
