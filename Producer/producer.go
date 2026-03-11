@@ -19,7 +19,6 @@ func StartProducer(w *kafka.Writer, key string, message []byte) {
 			Value: message,
 		},
 	)
-	defer w.Close()
 	if err != nil {
 		panic(err)
 	} else {

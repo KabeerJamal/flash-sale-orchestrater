@@ -49,6 +49,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	})
 	defer rdb.Close()
 	paymentCancelledWriter := createWriter(kafkaBrokerAddress, "Payment-Failed")
+	defer paymentCancelledWriter.Close()
 	go pollExpiredTimers(ctx, rdb, paymentCancelledWriter)
 
 	// prefill it in redis (POTENTIAL ERROR, if main shuts down and runs again, refill happens even when not supposed to happen)
@@ -77,6 +78,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 
 	reservationWriter := createWriter(kafkaBrokerAddress, "Reservations")
 	paymentWriter := createWriter(kafkaBrokerAddress, "Payment")
+	defer reservationWriter.Close()
+	defer paymentWriter.Close()
 
 	r.POST("/buy-request", func(c *gin.Context) {
 		var body map[string]string
