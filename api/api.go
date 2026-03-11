@@ -166,7 +166,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 
 		//call a function which adds ticket uuid to the ZSET
 		memberData := body["ticketUUID"] + "|" + body["userUUID"] + "|" + body["phoneUUID"]
-		startTimer(ctx, rdb, memberData)
+		StartTimer(ctx, rdb, memberData, 5*time.Minute)
 
 		//create a function which polls, and if it finds something, it creeates a topic which writes to kafka worker
 
@@ -202,7 +202,6 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 				IgnoreAPIVersionMismatch: true,
 			},
 		)
-		log.Println("event type:", event.Type)
 		if err != nil {
 			c.AbortWithStatus(http.StatusBadRequest) // signature check failed
 			return
@@ -351,8 +350,8 @@ func convertToBytes(data any) ([]byte, error) {
 	return json.Marshal(data)
 }
 
-func startTimer(ctx context.Context, rdb *redis.Client, memberData string) error {
-	expireTime := float64(time.Now().Add(5 * time.Minute).Unix())
+func StartTimer(ctx context.Context, rdb *redis.Client, memberData string, ttl time.Duration) error {
+	expireTime := float64(time.Now().Add(ttl).Unix())
 	err := rdb.ZAdd(ctx, "flash_sale_timers", redis.Z{
 		Score:  expireTime,
 		Member: memberData, // The data you want to retrieve later
@@ -379,7 +378,7 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 			}).Result()
 
 			if err != nil {
-				log.Println(err)
+				log.Println("Error: ", err)
 				time.Sleep(time.Second)
 				continue
 			}
@@ -392,6 +391,7 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 
 					//create a payment ,message with everything null, but ticket id phone uuid, status and user uuid filled
 
+					//to ensure race condition is avodied
 					if removed > 0 {
 						var paymentMessage PaymentEvent
 						parts := strings.Split(memberString, "|")
