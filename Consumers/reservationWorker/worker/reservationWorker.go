@@ -106,8 +106,11 @@ func ReservationWorker(ctx context.Context) error {
 				For a practice project: It is fine to leave it as is.
 				For enterprise: You would wrap both commands inside a Redis Pipeline or a Lua script to make them execute atomically (all-or-nothing).
 			*/
+			userUUID := data["userUUID"]
+			phoneUUID := data["phoneUUID"]
 			rdb.Set(ctx, ticketUUID, "WAITING_LIST", 0).Err()
-			rdb.RPush(ctx, "waitlist_queue", ticketUUID)
+			memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
+			rdb.RPush(ctx, "waitlist_queue", memberData)
 		} else {
 
 			err = w.WriteMessages(
