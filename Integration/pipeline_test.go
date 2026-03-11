@@ -5,14 +5,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"strconv"
 
 	"log/slog"
+	paymentWorker "myproject/Consumers/paymentWorker/worker"
 	reservationPersistenceWorker "myproject/Consumers/reservationPersistenceWorker/worker"
 	reservationWorker "myproject/Consumers/reservationWorker/worker"
+	rollbackWorker "myproject/Consumers/rollbackWorker/worker"
 	"myproject/api"
 	"net/http"
 	"os"
@@ -90,9 +94,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90"
 		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"
 
-		ticketUUID := doReservation(t, body)
-
-		//----TEST IN REDIS---
+		//test redis check
 		host, err := redisC.Host(ctx)
 		require.NoError(t, err)
 
@@ -101,11 +103,19 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb := redis.NewClient(&redis.Options{
 			Addr: host + ":" + port.Port(),
 		})
+		initialValueRedisReservation, err := rdb.Get(ctx, "reservation").Result()
+		require.NoError(t, err)
+		initialValueRedisReservationInt, err := strconv.Atoi(initialValueRedisReservation)
+
+		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+
+		//----TEST IN REDIS---
 
 		val, err := rdb.Get(ctx, "reservation").Result()
+		valInt, err := strconv.Atoi(val)
 		require.NoError(t, err)
 
-		require.Equal(t, "9", val)
+		require.Equal(t, initialValueRedisReservationInt, valInt+1)
 
 		//--TEST IF INSERTION HAPPENS
 		// 1. Declare variables to hold the data we read from the database
@@ -130,7 +140,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a91"
 		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e42"
 
-		ticketUUID := doReservation(t, body)
+		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
 
 		//mock ann send webhook,test if response 200
 		//mock json payload
@@ -180,12 +190,30 @@ func TestIntegrationPipeline(t *testing.T) {
 		})
 
 		require.Eventually(t, func() bool {
-			val, err := rdb.Get(ctx, ticketUUID).Result()
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID))
 			if err != nil {
-				return false
+				return false // Network error, try again on the next tick
 			}
-			return val == "PAID"
-		}, 15*time.Second, 500*time.Millisecond, "Expected ticketUUID to be PAID in Redis")
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
+
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == "PAID"
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status to become PAID within 15 seconds")
 		require.Eventually(t, func() bool {
 			val, err := rdb.Get(ctx, "total_paid").Result()
 			if err != nil {
@@ -208,9 +236,338 @@ func TestIntegrationPipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be PAID")
 	})
 
+	t.Run("Unsuccessful payment flow", func(t *testing.T) {
+
+		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a93" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e44"}`
+		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a93"
+		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e44"
+
+		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+
+		//test redis check
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+		initialValueRedisReservation, err := rdb.Get(ctx, "reservation").Result()
+		require.NoError(t, err)
+		initialValueRedisReservationInt, err := strconv.Atoi(initialValueRedisReservation)
+
+		//mock ann send webhook,test if response 200
+		//mock json payload
+		payload := fmt.Sprintf(`{
+			"type": "checkout.session.expired",
+			"data": {
+				"object": {
+					"id": "pi_test_123",
+					"amount_total": 1000,
+					"currency": "usd",
+					"payment_status": "unpaid",
+					"metadata": {
+						"ticketUUID": "%s",
+						"phoneUUID": "%s",
+						"userUUID": "%s"
+					}
+				}
+			}
+		}`, ticketUUID, phoneUUID, userUUID)
+
+		testSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+
+		signedPayload := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
+			Payload: []byte(payload),
+			Secret:  testSecret,
+		})
+
+		//create a post request http, with webhook endpoint, attaching releavant stuff asheaders
+		req, err := http.NewRequest("POST", "http://localhost:8080/webhook", bytes.NewBuffer(signedPayload.Payload))
+		require.NoError(t, err)
+		req.Header.Set("Stripe-Signature", signedPayload.Header)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		require.Eventually(t, func() bool {
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID))
+			if err != nil {
+				return false // Network error, try again on the next tick
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
+
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == "FAILED"
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status to become FAILED within 15 seconds")
+		require.Eventually(t, func() bool {
+			val, err := rdb.Get(ctx, "reservation").Result()
+			valInt, err := strconv.Atoi(val)
+			if err != nil {
+				return false
+			}
+			return valInt == initialValueRedisReservationInt+1
+		}, 15*time.Second, 500*time.Millisecond, "Expected Resevation to be 10 in Redis")
+
+		//check db , status should be reserved for that tikcet uuid
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				ticketUUID,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if errors.Is(err, sql.ErrNoRows) {
+				return true
+			}
+			return false
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
+
+	})
+
+	t.Run("Unsuccessful payment flow(Expired timer)", func(t *testing.T) {
+		//create user id and phone id
+		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a95" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e46"}`
+		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a95"
+		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e46"
+		//do reservation (get ticket uuid)
+		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+
+		//test redis check
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+		initialValueRedisReservation, err := rdb.Get(ctx, "reservation").Result()
+		require.NoError(t, err)
+		initialValueRedisReservationInt, err := strconv.Atoi(initialValueRedisReservation)
+
+		//call start timer and pass it all member data
+		memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
+
+		//this will call pollexpired timer
+		api.StartTimer(ctx, rdb, memberData, 1*time.Second)
+
+		//then same assertions as above code, also check if its removed from Zset
+		require.Eventually(t, func() bool {
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID))
+			if err != nil {
+				return false // Network error, try again on the next tick
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
+
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == "FAILED"
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status to become FAILED within 15 seconds")
+		require.Eventually(t, func() bool {
+			val, err := rdb.Get(ctx, "reservation").Result()
+			valInt, err := strconv.Atoi(val)
+			if err != nil {
+				return false
+			}
+			return valInt == initialValueRedisReservationInt+1
+		}, 15*time.Second, 500*time.Millisecond, "Expected Resevation to be 10 in Redis")
+
+		//check db , status should be reserved for that tikcet uuid
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				ticketUUID,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if errors.Is(err, sql.ErrNoRows) {
+				return true
+			}
+			return false
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
+
+	})
+
+	//2 more test cases left
+	t.Run("Assigned to wait list", func(t *testing.T) {
+		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"}`
+		// phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90"
+		// userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"
+
+		//test redis check
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+		_, err = rdb.Set(context.Background(), "reservation", 0, 0).Result()
+		require.NoError(t, err)
+
+		doReservation(t, body, "WAITING_LIST")
+
+		val, err := rdb.Get(ctx, "reservation").Result()
+		require.Equal(t, "0", val)
+
+	})
+
+	t.Run("Promoted to wait list", func(t *testing.T) {
+		/*If final assertions pass it must be the case that redis waiting queue is working fine*/
+		//test redis check
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+		rdb.Del(ctx, "waitlist_queue")
+		_, err = rdb.Set(context.Background(), "reservation", 1, 0).Result()
+		require.NoError(t, err)
+
+		//need 2 users
+		body1 := `{"phoneUUID": "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97" , "userUUID": "16a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"}`
+		phoneUUID1 := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97"
+		userUUID1 := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"
+
+		body2 := `{"phoneUUID": "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a98" , "userUUID": "26a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e48"}`
+		phoneUUID2 := "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a98"
+		userUUID2 := "26a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e48"
+
+		ticketUUID1 := doReservation(t, body1, "SUCCESSFUL_RESERVATION")
+		ticketUUID2 := doReservation(t, body2, "WAITING_LIST")
+
+		memberData := ticketUUID1 + "|" + userUUID1 + "|" + phoneUUID1
+
+		//this will call pollexpired timer
+		api.StartTimer(ctx, rdb, memberData, 1*time.Second)
+
+		//then same assertions as above code, also check if its removed from Zset
+		require.Eventually(t, func() bool {
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID1))
+			if err != nil {
+				return false // Network error, try again on the next tick
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
+
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == "FAILED"
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status to become FAILED within 15 seconds")
+
+		//check db , status should be reserved for that tikcet uuid
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				ticketUUID1,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if errors.Is(err, sql.ErrNoRows) {
+				return true
+			}
+			return false
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
+
+		require.Eventually(t, func() bool {
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID2))
+			if err != nil {
+				return false // Network error, try again on the next tick
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
+
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == "SUCCESSFUL_RESERVATION"
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status for user B to become SUCCESSFUL_RESERVATION within 15 seconds")
+		require.Eventually(t, func() bool {
+			val, err := rdb.Get(ctx, "reservation").Result()
+			valInt, err := strconv.Atoi(val)
+			if err != nil {
+				return false
+			}
+			return valInt == 0
+		}, 15*time.Second, 500*time.Millisecond, "Expected Resevation to be 0 in Redis")
+		//poll and check db
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				ticketUUID2,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if err != nil {
+				return false
+			}
+			return dbPhoneUUID == phoneUUID2 && dbUserUUID == userUUID2 && dbStatus == "RESERVED"
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be RESERVED")
+
+	})
+
 }
 
-func doReservation(t *testing.T, body string) string {
+func doReservation(t *testing.T, body string, status string) string {
 	// var requestData map[string]string
 	// err := json.Unmarshal([]byte(body), &requestData)
 	// require.NoError(t, err)
@@ -263,7 +620,7 @@ func doReservation(t *testing.T, body string) string {
 		}
 
 		// If it matches, this returns true and the test immediately passes!
-		return statusResponse["status"] == "SUCCESSFUL_RESERVATION"
+		return statusResponse["status"] == status
 
 	}, 15*time.Second, 500*time.Millisecond, "Expected status to become SUCCESSFUL_RESERVATION within 15 seconds")
 
@@ -304,6 +661,20 @@ func startWorkers(t *testing.T, ctx context.Context) {
 		err := reservationWorker.ReservationWorker(ctx)
 		if err != nil {
 			t.Logf("InsertionWorker stopped: %v", err)
+		}
+	}()
+
+	go func() {
+		err := paymentWorker.PaymentWorker(ctx)
+		if err != nil {
+			t.Logf("PaymentWorker stopped: %v", err)
+		}
+	}()
+
+	go func() {
+		err := rollbackWorker.RollbackWorker(ctx)
+		if err != nil {
+			t.Logf("Rollback stopped: %v", err)
 		}
 	}()
 }
