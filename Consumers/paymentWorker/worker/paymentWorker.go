@@ -48,7 +48,7 @@ func PaymentWorker(ctx context.Context) error {
 		}
 
 		// 3. Print message
-		slog.Info("Received message",
+		slog.Info("Received message in Payment Worker",
 			"key", string(msg.Key),
 			"value", string(msg.Value),
 		)
@@ -76,13 +76,16 @@ func PaymentWorker(ctx context.Context) error {
 
 		if paymentMessage.Status == "paid" {
 
-			w.WriteMessages(
+			err := w.WriteMessages(
 				ctx,
 				kafka.Message{
 					Key:   msg.Key,
 					Value: valueBytes,
 				},
 			)
+			if err != nil {
+				slog.Error("failed to write payment message", "error", err)
+			}
 		} else {
 
 			rollBackWriter.WriteMessages(
