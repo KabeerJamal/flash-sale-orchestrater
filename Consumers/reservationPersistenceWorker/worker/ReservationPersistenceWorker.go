@@ -53,7 +53,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 	updateReservationReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress},
-		Topic:   "Payment-successful",
+		Topic:   "Payment-Successful",
 		GroupID: "UpdateToSQL-group",
 	})
 	defer updateReservationReader.Close()
@@ -122,7 +122,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 				slog.Error("Error while reading message", "error", err)
 				return
 			}
-			slog.Info("Received message in insertion Worker", "key", string(msg.Key), "value", string(msg.Value))
+			slog.Info("Received message in reservation persistence Worker", "key", string(msg.Key), "value", string(msg.Value))
 
 			var event PaymentEvent
 			json.Unmarshal(msg.Value, &event)
