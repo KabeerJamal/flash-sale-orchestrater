@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -38,9 +39,16 @@ func RollbackWorker(ctx context.Context) error {
 
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: []string{kafkaBrokerAddress}, //TODO: this is hardcoded, need to fix that
+		Brokers: []string{kafkaBrokerAddress},
 		Topic:   "Payment-Failed",
 		GroupID: "Rollback-group",
+	})
+
+	w := kafka.NewWriter(kafka.WriterConfig{
+		Brokers: []string{kafkaBrokerAddress},
+		Topic:   "Reservations",
+		//Balancer: &kafka.LeastBytes{},
+		Balancer: &kafka.Hash{},
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,20 +124,51 @@ func RollbackWorker(ctx context.Context) error {
 
 						Use your second snippet exactly as you wrote it!
 					*/
-					nextTicket, err := rdb.LPop(ctx, "waitlist_queue").Result()
+					nextCustomer, err := rdb.LPop(ctx, "waitlist_queue").Result()
+
+					parts := strings.Split(nextCustomer, "|")
+					if len(parts) != 3 {
+						continue // safe fallback
+					}
+
+					nextTicketUUID := parts[0]
+					nextUserUUID := parts[1]
+					nextPhoneUUID := parts[2]
 					if err == redis.Nil {
 						// waitlist empty
 					} else if err != nil {
 						slog.Error("Error popping from waitlist queue", "error", err)
 					} else {
-						err = rdb.Set(ctx, nextTicket, "SUCCESSFUL_RESERVATION", 0).Err()
+						// err = rdb.Set(ctx, nextTicketUUID, "SUCCESSFUL_RESERVATION", 0).Err()
+						// if err != nil {
+						// 	slog.Error("Failed to update waitlist ticket status",
+						// 		"ticketUUID", nextTicketUUID,
+						// 		"error", err,
+						// 	)
+						// }
+						// err = rdb.Decr(ctx, "reservation").Err()
+						// if err != nil {
+						// 	slog.Error("Error decrementing stock",
+						// 		"ticketUUID", nextTicketUUID,
+						// 		"error", err,
+						// 	)
+						// }
+
+						payload := map[string]string{"ticketUUID": nextTicketUUID, "phoneUUID": nextPhoneUUID, "userUUID": nextUserUUID, "promoted": "true"}
+						b, _ := json.Marshal(payload)
+						err = w.WriteMessages(
+							ctx,
+
+							kafka.Message{
+								Key:   []byte(nextTicketUUID), //convert in bytes
+								Value: b,                      //convert in bytes
+							},
+						)
 						if err != nil {
-							slog.Error("Failed to update waitlist ticket status",
-								"ticketUUID", nextTicket,
-								"error", err,
-							)
+							slog.Error("failed to write message", "error", err)
 						}
 					}
+
 					success = true
 					break // It worked, break out of the retry loop
 				}
