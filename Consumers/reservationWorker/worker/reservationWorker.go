@@ -63,7 +63,7 @@ func ReservationWorker(ctx context.Context) error {
 
 		// Idempotency Check
 		status, err := rdb.Get(ctx, ticketUUID).Result()
-		if err == nil && (status == "SUCCESSFUL_RESERVATION" || status == "WAITING_LIST") {
+		if err == nil && (status == "SUCCESSFUL_RESERVATION" || status == "WAITING_LIST") && data["promoted"] == "" {
 			slog.Info("Duplicate message for ticket, skipping", "ticketID", ticketUUID, "status", status)
 			continue // Skip processing!
 		}
