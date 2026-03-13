@@ -126,33 +126,19 @@ func RollbackWorker(ctx context.Context) error {
 					*/
 					nextCustomer, err := rdb.LPop(ctx, "waitlist_queue").Result()
 
-					parts := strings.Split(nextCustomer, "|")
-					if len(parts) != 3 {
-						continue // safe fallback
-					}
-
-					nextTicketUUID := parts[0]
-					nextUserUUID := parts[1]
-					nextPhoneUUID := parts[2]
 					if err == redis.Nil {
 						// waitlist empty
 					} else if err != nil {
 						slog.Error("Error popping from waitlist queue", "error", err)
 					} else {
-						// err = rdb.Set(ctx, nextTicketUUID, "SUCCESSFUL_RESERVATION", 0).Err()
-						// if err != nil {
-						// 	slog.Error("Failed to update waitlist ticket status",
-						// 		"ticketUUID", nextTicketUUID,
-						// 		"error", err,
-						// 	)
-						// }
-						// err = rdb.Decr(ctx, "reservation").Err()
-						// if err != nil {
-						// 	slog.Error("Error decrementing stock",
-						// 		"ticketUUID", nextTicketUUID,
-						// 		"error", err,
-						// 	)
-						// }
+						parts := strings.Split(nextCustomer, "|")
+						if len(parts) != 3 {
+							slog.Error("malformed waitlist entry", "entry", nextCustomer)
+						}
+
+						nextTicketUUID := parts[0]
+						nextUserUUID := parts[1]
+						nextPhoneUUID := parts[2]
 
 						payload := map[string]string{"ticketUUID": nextTicketUUID, "phoneUUID": nextPhoneUUID, "userUUID": nextUserUUID, "promoted": "true"}
 						b, _ := json.Marshal(payload)
