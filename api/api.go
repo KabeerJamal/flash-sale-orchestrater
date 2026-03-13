@@ -76,6 +76,13 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	//browser sends a request with request body data
 	r := gin.Default()
 
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
+		AllowCredentials: true,
+	}))
+
 	reservationWriter := createWriter(kafkaBrokerAddress, "Reservations")
 	paymentWriter := createWriter(kafkaBrokerAddress, "Payment")
 	defer reservationWriter.Close()
