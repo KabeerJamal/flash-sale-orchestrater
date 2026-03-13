@@ -7,11 +7,13 @@ import (
 	"io"
 	"log"
 	producer "myproject/Producer"
+	"myproject/db"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -294,6 +296,36 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 			return
 		}
 
+	})
+
+	//Fetch Users
+	r.GET("/users", func(c *gin.Context) {
+		res, err := db.GetUsers()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, res)
+	})
+
+	//Fetch Phones
+	r.GET("/phones", func(c *gin.Context) {
+		res, err := db.GetPhones()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, res)
+	})
+
+	r.GET("/phones/:phoneUUID/status", func(c *gin.Context) {
+		phoneUUID := c.Param("phoneUUID")
+		res, err := db.GetPhoneStatus(phoneUUID)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": res})
 	})
 
 	/*r.Run() is an infinite loop. It completely ignores the ctx context.
