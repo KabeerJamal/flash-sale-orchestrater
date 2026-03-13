@@ -10,3 +10,5 @@ env
 *.log
 /bin/
 /vendor/  
+
+/frontend/node_modules
