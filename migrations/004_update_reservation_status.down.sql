@@ -1,0 +1,5 @@
+ALTER TABLE RESERVATIONS 
+DROP CONSTRAINT reservations_status_check,
+ADD CONSTRAINT reservations_status_check 
+CHECK (status IN ('RESERVED', 'PAID', 'CANCELLED')),
+ALTER COLUMN status DROP DEFAULT;
