@@ -211,7 +211,7 @@ func soldOut(ctx context.Context, rdb *redis.Client) {
 			slog.Error("Redis error during LPop", "error", err)
 			continue // Skip if there's a weird network error
 		}
-		rdb.Set(ctx, ticketUUID, "SOLD_OUT", 0).Err()
+		err = rdb.Set(ctx, ticketUUID, "SOLD_OUT", 0).Err()
 		if err != nil {
 			slog.Error("Failed to set ticket as SOLD_OUT", "ticketID", ticketUUID, "error", err)
 		}
