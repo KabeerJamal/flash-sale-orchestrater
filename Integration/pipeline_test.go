@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"myproject/shared"
 	"net"
 	"strconv"
 
@@ -103,15 +104,15 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb := redis.NewClient(&redis.Options{
 			Addr: host + ":" + port.Port(),
 		})
-		initialValueRedisReservation, err := rdb.Get(ctx, "reservation").Result()
+		initialValueRedisReservation, err := rdb.Get(ctx, shared.Reservations).Result()
 		require.NoError(t, err)
 		initialValueRedisReservationInt, err := strconv.Atoi(initialValueRedisReservation)
 
-		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
 		//----TEST IN REDIS---
 
-		val, err := rdb.Get(ctx, "reservation").Result()
+		val, err := rdb.Get(ctx, shared.Reservations).Result()
 		valInt, err := strconv.Atoi(val)
 		require.NoError(t, err)
 
@@ -140,7 +141,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a91"
 		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e42"
 
-		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
 		//mock ann send webhook,test if response 200
 		//mock json payload
@@ -151,7 +152,7 @@ func TestIntegrationPipeline(t *testing.T) {
 					"id": "pi_test_123",
 					"amount_total": 1000,
 					"currency": "usd",
-					"payment_status": "paid",
+					"payment_status": "%s",
 					"metadata": {
 						"ticketUUID": "%s",
 						"phoneUUID": "%s",
@@ -159,7 +160,7 @@ func TestIntegrationPipeline(t *testing.T) {
 					}
 				}
 			}
-		}`, ticketUUID, phoneUUID, userUUID)
+		}`, shared.StripePaid, ticketUUID, phoneUUID, userUUID)
 
 		testSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
 
@@ -211,11 +212,11 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 
 			// If it matches, this returns true and the test immediately passes!
-			return statusResponse["status"] == "PAID"
+			return statusResponse["status"] == shared.Paid
 
 		}, 15*time.Second, 500*time.Millisecond, "Expected status to become PAID within 15 seconds")
 		require.Eventually(t, func() bool {
-			val, err := rdb.Get(ctx, "total_paid").Result()
+			val, err := rdb.Get(ctx, shared.TotalPaid).Result()
 			if err != nil {
 				return false
 			}
@@ -242,7 +243,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a93"
 		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e44"
 
-		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
 		//test redis check
 		host, err := redisC.Host(ctx)
@@ -253,7 +254,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb := redis.NewClient(&redis.Options{
 			Addr: host + ":" + port.Port(),
 		})
-		initialValueRedisReservation, err := rdb.Get(ctx, "reservation").Result()
+		initialValueRedisReservation, err := rdb.Get(ctx, shared.Reservations).Result()
 		require.NoError(t, err)
 		initialValueRedisReservationInt, err := strconv.Atoi(initialValueRedisReservation)
 
@@ -316,11 +317,11 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 
 			// If it matches, this returns true and the test immediately passes!
-			return statusResponse["status"] == "FAILED"
+			return statusResponse["status"] == shared.Failed
 
 		}, 15*time.Second, 500*time.Millisecond, "Expected status to become FAILED within 15 seconds")
 		require.Eventually(t, func() bool {
-			val, err := rdb.Get(ctx, "reservation").Result()
+			val, err := rdb.Get(ctx, shared.Reservations).Result()
 			valInt, err := strconv.Atoi(val)
 			if err != nil {
 				return false
@@ -349,7 +350,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a95"
 		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e46"
 		//do reservation (get ticket uuid)
-		ticketUUID := doReservation(t, body, "SUCCESSFUL_RESERVATION")
+		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
 		//test redis check
 		host, err := redisC.Host(ctx)
@@ -360,7 +361,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb := redis.NewClient(&redis.Options{
 			Addr: host + ":" + port.Port(),
 		})
-		initialValueRedisReservation, err := rdb.Get(ctx, "reservation").Result()
+		initialValueRedisReservation, err := rdb.Get(ctx, shared.Reservations).Result()
 		require.NoError(t, err)
 		initialValueRedisReservationInt, err := strconv.Atoi(initialValueRedisReservation)
 
@@ -393,11 +394,11 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 
 			// If it matches, this returns true and the test immediately passes!
-			return statusResponse["status"] == "FAILED"
+			return statusResponse["status"] == shared.Failed
 
 		}, 15*time.Second, 500*time.Millisecond, "Expected status to become FAILED within 15 seconds")
 		require.Eventually(t, func() bool {
-			val, err := rdb.Get(ctx, "reservation").Result()
+			val, err := rdb.Get(ctx, shared.Reservations).Result()
 			valInt, err := strconv.Atoi(val)
 			if err != nil {
 				return false
@@ -435,12 +436,12 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb := redis.NewClient(&redis.Options{
 			Addr: host + ":" + port.Port(),
 		})
-		_, err = rdb.Set(context.Background(), "reservation", 0, 0).Result()
+		_, err = rdb.Set(context.Background(), shared.Reservations, 0, 0).Result()
 		require.NoError(t, err)
 
-		doReservation(t, body, "WAITING_LIST")
+		doReservation(t, body, shared.WaitingList)
 
-		val, err := rdb.Get(ctx, "reservation").Result()
+		val, err := rdb.Get(ctx, shared.Reservations).Result()
 		require.Equal(t, "0", val)
 
 	})
@@ -456,12 +457,12 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb := redis.NewClient(&redis.Options{
 			Addr: host + ":" + port.Port(),
 		})
-		rdb.Del(ctx, "waitlist_queue")
-		_, err = rdb.Set(context.Background(), "reservation", 1, 0).Result()
+		rdb.Del(ctx, shared.WaitListQueue)
+		_, err = rdb.Set(context.Background(), shared.Reservations, 1, 0).Result()
 		require.NoError(t, err)
 
 		//need 2 users
-		body1 := `{"phoneUUID": "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97" , "userUUID": "16a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"}`
+		body1 := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"}`
 		phoneUUID1 := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97"
 		userUUID1 := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"
 
@@ -469,8 +470,8 @@ func TestIntegrationPipeline(t *testing.T) {
 		phoneUUID2 := "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a98"
 		userUUID2 := "26a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e48"
 
-		ticketUUID1 := doReservation(t, body1, "SUCCESSFUL_RESERVATION")
-		ticketUUID2 := doReservation(t, body2, "WAITING_LIST")
+		ticketUUID1 := doReservation(t, body1, shared.SuccessfulReservation)
+		ticketUUID2 := doReservation(t, body2, shared.WaitingList)
 
 		memberData := ticketUUID1 + "|" + userUUID1 + "|" + phoneUUID1
 
@@ -500,7 +501,7 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 
 			// If it matches, this returns true and the test immediately passes!
-			return statusResponse["status"] == "FAILED"
+			return statusResponse["status"] == shared.Failed
 
 		}, 15*time.Second, 500*time.Millisecond, "Expected status to become FAILED within 15 seconds")
 
@@ -539,11 +540,11 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 
 			// If it matches, this returns true and the test immediately passes!
-			return statusResponse["status"] == "SUCCESSFUL_RESERVATION"
+			return statusResponse["status"] == shared.SuccessfulReservation
 
 		}, 15*time.Second, 500*time.Millisecond, "Expected status for user B to become SUCCESSFUL_RESERVATION within 15 seconds")
 		require.Eventually(t, func() bool {
-			val, err := rdb.Get(ctx, "reservation").Result()
+			val, err := rdb.Get(ctx, shared.Reservations).Result()
 			valInt, err := strconv.Atoi(val)
 			if err != nil {
 				return false
@@ -585,7 +586,7 @@ func doReservation(t *testing.T, body string, status string) string {
 	require.NoError(t, err)
 
 	// {"ticketUUID": x, "status":y}
-	require.Equal(t, "PENDING", buyResponse["status"])
+	require.Equal(t, shared.Pending, buyResponse["status"])
 	require.NotEmpty(t, buyResponse["ticketUUID"])
 
 	/*
