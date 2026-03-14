@@ -54,7 +54,7 @@ func PaymentWorker(ctx context.Context) error {
 			"value", string(msg.Value),
 		)
 		//if success, send topic to insertion worker to update database
-		var paymentMessage PaymentEvent
+		var paymentMessage shared.PaymentEvent
 
 		//call a function which takes in msg.Value and returns paymentMessage
 		paymentMessage, err = convertToPaymentMessage(msg.Value)
@@ -103,12 +103,12 @@ func PaymentWorker(ctx context.Context) error {
 
 // When you use json.Unmarshal into a struct, extra fields in the JSON are ignored automatically.
 // So if msg.Value contains many more fields, Go will just fill the ones that match your struct and skip the rest
-func convertToPaymentMessage(data []byte) (PaymentEvent, error) {
-	var pm PaymentEvent
+func convertToPaymentMessage(data []byte) (shared.PaymentEvent, error) {
+	var pm shared.PaymentEvent
 
 	err := json.Unmarshal(data, &pm)
 	if err != nil {
-		return PaymentEvent{}, err
+		return shared.PaymentEvent{}, err
 	}
 
 	return pm, nil

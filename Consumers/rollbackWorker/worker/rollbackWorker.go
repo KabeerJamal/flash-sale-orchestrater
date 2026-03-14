@@ -67,7 +67,7 @@ func RollbackWorker(ctx context.Context) error {
 		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
 		// Unmarshal the message
-		var pm PaymentEvent
+		var pm shared.PaymentEvent
 		err = json.Unmarshal(msg.Value, &pm)
 		if err != nil {
 			slog.Error("Error unmarshaling message", "error", err)
@@ -141,7 +141,11 @@ func RollbackWorker(ctx context.Context) error {
 						nextUserUUID := parts[1]
 						nextPhoneUUID := parts[2]
 
-						payload := map[string]string{"ticketUUID": nextTicketUUID, "phoneUUID": nextPhoneUUID, "userUUID": nextUserUUID, "promoted": "true"}
+						var payload shared.ReservationEvent
+						payload.TicketUUID = nextTicketUUID
+						payload.UserUUID = nextUserUUID
+						payload.PhoneUUID = nextPhoneUUID
+						payload.Promoted = true
 						b, _ := json.Marshal(payload)
 						err = w.WriteMessages(
 							ctx,

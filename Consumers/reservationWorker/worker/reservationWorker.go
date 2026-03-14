@@ -25,7 +25,7 @@ func ReservationWorker(ctx context.Context) error {
 
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: []string{kafkaBrokerAddress},
-		Topic:   "Reservation-successful",
+		Topic:   shared.TopicReservationSuccessful,
 		//Balancer: &kafka.LeastBytes{},
 		Balancer: &kafka.Hash{},
 	})
@@ -53,18 +53,18 @@ func ReservationWorker(ctx context.Context) error {
 		// print message..
 		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
-		var data map[string]string
+		var data shared.ReservationEvent
 
 		err = json.Unmarshal(msg.Value, &data)
 		if err != nil {
 			slog.Error("Error unmarshaling JSON", "error", err)
 			return err
 		}
-		ticketUUID := data["ticketUUID"]
+		ticketUUID := data.TicketUUID
 
 		// Idempotency Check
 		status, err := rdb.Get(ctx, ticketUUID).Result()
-		if err == nil && (status == "SUCCESSFUL_RESERVATION" || status == "WAITING_LIST") && data["promoted"] == "" {
+		if err == nil && (status == shared.SuccessfulReservation || status == shared.WaitingList) && !data.Promoted {
 			slog.Info("Duplicate message for ticket, skipping", "ticketID", ticketUUID, "status", status)
 			continue // Skip processing!
 		}
@@ -107,8 +107,8 @@ func ReservationWorker(ctx context.Context) error {
 				For a practice project: It is fine to leave it as is.
 				For enterprise: You would wrap both commands inside a Redis Pipeline or a Lua script to make them execute atomically (all-or-nothing).
 			*/
-			userUUID := data["userUUID"]
-			phoneUUID := data["phoneUUID"]
+			userUUID := data.UserUUID
+			phoneUUID := data.PhoneUUID
 			rdb.Set(ctx, ticketUUID, shared.WaitingList, 0).Err()
 			memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
 			rdb.RPush(ctx, "waitlist_queue", memberData)

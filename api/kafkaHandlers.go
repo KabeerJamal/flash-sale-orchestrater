@@ -22,19 +22,19 @@ import (
 
 func buyRequest(rdb *redis.Client, reservationWriter *kafka.Writer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var body map[string]string
+		var body shared.ReservationEvent
 		c.BindJSON(&body)
 
 		//generate a ticketUUID and pass it in body
 		ticketUUID := uuid.New().String()
-		body["ticketUUID"] = ticketUUID
+		body.TicketUUID = ticketUUID
 
 		b, _ := json.Marshal(body)
 
 		go producer.StartProducer(reservationWriter, ticketUUID, b)
 
 		//put ticketUUID and status in redis
-		rdb.Set(context.Background(), ticketUUID, "PENDING", 0).Err()
+		rdb.Set(context.Background(), ticketUUID, shared.Pending, 0).Err()
 
 		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": shared.Pending}) //Immediate response with ticket ID and status as pending
 	}

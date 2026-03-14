@@ -82,7 +82,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 				return
 			}
 
-			var data map[string]string
+			var data shared.ReservationEvent
 
 			err = json.Unmarshal(msg.Value, &data)
 			if err != nil {
@@ -95,18 +95,18 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			//data["phoneUUID"] and data["userUUID"] insertion into db first(ONLY FOR DEMO MODE)
 			//----TEMP CODE---
-			_, err = db.Exec("INSERT INTO USERS (userUUID, userName) VALUES ($1, $2) ON CONFLICT (userUUID) DO NOTHING", data["userUUID"], "Messi")
+			_, err = db.Exec("INSERT INTO USERS (userUUID, userName) VALUES ($1, $2) ON CONFLICT (userUUID) DO NOTHING", data.UserUUID, "Messi")
 			if err != nil {
 				continue
 			}
-			_, err = db.Exec("INSERT INTO PHONES (phoneUUID, phoneName) VALUES ($1, $2) ON CONFLICT (phoneUUID) DO NOTHING", data["phoneUUID"], "Iphone")
+			_, err = db.Exec("INSERT INTO PHONES (phoneUUID, phoneName) VALUES ($1, $2) ON CONFLICT (phoneUUID) DO NOTHING", data.PhoneUUID, "Iphone")
 			if err != nil {
 				continue
 			}
 			//---TEMP CODE END---
 
 			//on conflict do nothing is basiaclly idempotency check
-			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data["ticketUUID"], data["phoneUUID"], data["userUUID"], "RESERVED")
+			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data.TicketUUID, data.PhoneUUID, data.UserUUID, "RESERVED")
 			if err != nil {
 				continue
 			}
@@ -125,7 +125,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			}
 			slog.Info("Received message in reservation persistence Worker", "key", string(msg.Key), "value", string(msg.Value))
 
-			var event PaymentEvent
+			var event shared.PaymentEvent
 			json.Unmarshal(msg.Value, &event)
 
 			// --- Retry Logic for Race Condition ---
