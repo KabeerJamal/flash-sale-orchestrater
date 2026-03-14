@@ -47,7 +47,7 @@ func RollbackWorker(ctx context.Context) error {
 
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: []string{kafkaBrokerAddress},
-		Topic:   shared.TopicReservation,
+		Topic:   shared.TopicReservationSuccessful,
 		//Balancer: &kafka.LeastBytes{},
 		Balancer: &kafka.Hash{},
 	})
@@ -93,50 +93,38 @@ func RollbackWorker(ctx context.Context) error {
 				rowsAffected, _ := res.RowsAffected()
 
 				if rowsAffected > 0 {
-					// 3. We successfully deleted the row! Increment the stock back safely.
-					err = rdb.Incr(ctx, shared.Reservations).Err()
-					if err != nil {
-						slog.Error("Error incrementing stock",
-							"ticketUUID", pm.TicketUUID,
-							"error", err,
-						)
-					} else {
-						slog.Info("Successfully deleted reservation and restored stock",
-							"ticketUUID", pm.TicketUUID,
-							"attempt", i,
-						)
+					//get user form waitlist. set ticket UUID status to RESERVATION_SUCCESSFUL
+					script := redis.NewScript(`
+							local customer = redis.call('LPOP', KEYS[1])
+
+							if customer then
+
+								local parts = {}
+								for part in string.gmatch(customer, '[^|]+') do
+									table.insert(parts, part)
+								end
+								local ticketUUID = parts[1]
+								redis.call('SET', ticketUUID, KEYS[2])
+								return customer
+							else
+								redis.call('INCR', KEYS[3])
+								return nil
+								end
+						`)
+					//dont call kafka if no one in waitlist
+					//return customer so then i can split it
+
+					result, err := script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.SuccessfulReservation, shared.Reservations}).Result()
+					if err != nil && err != redis.Nil {
+						slog.Error("Some problem with redis database", "error", err)
+						return err
 					}
 
-					/*
-						Wrong snippet:
-						nextTicket := rdb.LPop(ctx, "waitlist_queue").Result() if nextTicket != nil { rdb.Set(ctx, nextTicket, "SUCCESSFUL_RESERVATION", 0) }
-
-						The first snippet is **wrong** and won't even compile. Here is why:
-						1. `Result()` returns two values: the string (ticket UUID) and the error. Assigning it to just `nextTicket` causes a Go compiler error (`assignment mismatch: 1 variable but 2 values`).
-						2. In Go, a `string` can never be `nil`. So checking `if nextTicket != nil` is invalid.
-
-						**Your second snippet is 100% correct and production-ready.**
-
-						It perfectly handles:
-						1. Both return values `(nextTicket, err)`.
-						2. The specific `redis.Nil` case (which happens when `LPop` tries to pop from an empty list).
-						3. Any actual connection errors.
-						4. Catching the error on the subsequent `rdb.Set` command and logging it nicely with `slog`.
-
-						Use your second snippet exactly as you wrote it!
-					*/
-					nextCustomer, err := rdb.LPop(ctx, shared.WaitListQueue).Result()
-
-					if err == redis.Nil {
-						// waitlist empty
-					} else if err != nil {
-						slog.Error("Error popping from waitlist queue", "error", err)
-					} else {
-						parts := strings.Split(nextCustomer, "|")
+					if result != nil {
+						parts := strings.Split(result.(string), "|")
 						if len(parts) != 3 {
-							slog.Error("malformed waitlist entry", "entry", nextCustomer)
+							slog.Error("malformed waitlist entry", "entry", result)
 						}
-
 						nextTicketUUID := parts[0]
 						nextUserUUID := parts[1]
 						nextPhoneUUID := parts[2]
@@ -155,20 +143,22 @@ func RollbackWorker(ctx context.Context) error {
 								Value: b,                      //convert in bytes
 							},
 						)
+
 						if err != nil {
 							slog.Error("failed to write message", "error", err)
 						}
 					}
-
 					success = true
 					break // It worked, break out of the retry loop
+
+				}
+
 				}
 
 				slog.Warn("Ticket not found, waiting for insertion or already deleted",
 					"attempt", i,
 					"ticketUUID", pm.TicketUUID,
 				)
-			}
 
 			// Sleep before trying again
 			if i < maxRetries {
@@ -181,7 +171,6 @@ func RollbackWorker(ctx context.Context) error {
 				"ticketUUID", pm.TicketUUID,
 			)
 		}
-
 		// Update the final status in Redis so the frontend knows it failed
 		err = rdb.Set(ctx, pm.TicketUUID, shared.Failed, 0).Err()
 		if err != nil {
