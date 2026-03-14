@@ -5,20 +5,20 @@ const (
 	TopicReservationSuccessful = "Reservation-successful"
 	TopicPayment               = "Payment"
 	TopicPaymentSuccessful     = "Payment-Successful"
-	TopicPaymentFailure        = "Payment-Failure"
+	TopicPaymentFailure        = "Payment-Failed"
 
 	TopicReservationGroup           = "Reservation-group"
 	TopicReservationSuccessfulGroup = "InsertionToSQL-group"
 	TopicPaymentGroup               = "Payment-group"
 	TopicPaymentSuccessfulGroup     = "UpdateToSQL-group"
-	TopicRollbackGroup              = "Rollback-group"
+	TopicPaymentFailureGroup        = "Rollback-group"
 )
 
 /*
 Topic ownership — who produces and who consumes each topic:
 
 PRODUCERS:
-  - API/Producer        → Reservation, Payment, Payment-Failure
+  - API/Producer        writes -> Reservation, Payment, Payment-Failure
 
 CONSUMERS:
   - Reservation Worker          reads: Reservation             writes: Reservation-Successful

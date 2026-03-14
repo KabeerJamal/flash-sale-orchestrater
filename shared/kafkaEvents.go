@@ -12,3 +12,11 @@ type PaymentEvent struct {
 	Currency        string `json:"currency"`
 	Status          string `json:"status"`
 }
+
+//Kafka value for topic Reservation and Reservation-Successful
+type ReservationEvent struct {
+	TicketUUID string `json:"ticketUUID"`
+	PhoneUUID  string `json:"phoneUUID"  binding:"required"`
+	UserUUID   string `json:"userUUID"   binding:"required"`
+	Promoted   bool   `json:"promoted"`
+}
