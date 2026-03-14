@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"myproject/shared"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -157,7 +159,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 							return
 						}
 
-						if totalPaid == 10 {
+						if strconv.FormatInt(totalPaid, 10) == os.Getenv("TOTAL_PRODUCTS") {
 							// Pass a fresh context so the background task doesn't die if the main worker shuts down.
 							go soldOut(context.Background(), rdb)
 						}
@@ -192,7 +194,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 func soldOut(ctx context.Context, rdb *redis.Client) {
 
 	for {
-		ticketUUID, err := rdb.LPop(ctx, shared.WaitListQueue).Result()
+		customer, err := rdb.LPop(ctx, shared.WaitListQueue).Result()
 
 		if err == redis.Nil {
 			break // The list is completely empty, exit the loop
@@ -202,6 +204,16 @@ func soldOut(ctx context.Context, rdb *redis.Client) {
 			slog.Error("Redis error during LPop", "error", err)
 			continue // Skip if there's a weird network error
 		}
+
+		parts := strings.Split(customer, "|")
+		if len(parts) != 3 {
+			slog.Error("malformed waitlist entry", "entry", customer)
+		}
+
+		ticketUUID := parts[0]
+		//nextUserUUID := parts[1]
+		//nextPhoneUUID := parts[2]
+
 		err = rdb.Set(ctx, ticketUUID, shared.SoldOut, 0).Err()
 		if err != nil {
 			slog.Error("Failed to set ticket as SOLD_OUT", "ticketID", ticketUUID, "error", err)
