@@ -9,6 +9,7 @@ import (
 	"myproject/shared"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +52,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	go pollExpiredTimers(ctx, rdb, paymentCancelledWriter)
 
 	// prefill it in redis (POTENTIAL ERROR, if main shuts down and runs again, refill happens even when not supposed to happen)
-	_, err := rdb.Set(context.Background(), shared.Reservations, 10, 0).Result()
+	totalProducts, _ := strconv.Atoi(os.Getenv("TOTAL_PRODUCTS"))
+	_, err := rdb.Set(context.Background(), shared.Reservations, totalProducts, 0).Result()
 	if err != nil {
 		return fmt.Errorf("redis error: %w", err)
 	}
