@@ -153,12 +153,12 @@ func RollbackWorker(ctx context.Context) error {
 
 				}
 
-				}
+			}
 
-				slog.Warn("Ticket not found, waiting for insertion or already deleted",
-					"attempt", i,
-					"ticketUUID", pm.TicketUUID,
-				)
+			slog.Warn("Ticket not found, waiting for insertion or already deleted",
+				"attempt", i,
+				"ticketUUID", pm.TicketUUID,
+			)
 
 			// Sleep before trying again
 			if i < maxRetries {

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
@@ -423,9 +424,9 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	//2 more test cases left
 	t.Run("Assigned to wait list", func(t *testing.T) {
-		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"}`
-		// phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90"
-		// userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"
+		userUUID := uuid.New().String()
+		phoneUUID := uuid.New().String()
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		//test redis check
 		host, err := redisC.Host(ctx)
@@ -437,6 +438,7 @@ func TestIntegrationPipeline(t *testing.T) {
 			Addr: host + ":" + port.Port(),
 		})
 		_, err = rdb.Set(context.Background(), shared.Reservations, 0, 0).Result()
+		os.Setenv("TOTAL_PRODUCTS", "0")
 		require.NoError(t, err)
 
 		doReservation(t, body, shared.WaitingList)
@@ -459,6 +461,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		})
 		rdb.Del(ctx, shared.WaitListQueue)
 		_, err = rdb.Set(context.Background(), shared.Reservations, 1, 0).Result()
+		os.Setenv("TOTAL_PRODUCTS", "1")
 		require.NoError(t, err)
 
 		//need 2 users
@@ -566,6 +569,174 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	})
 
+	t.Run("Product Sold out", func(t *testing.T) {
+		os.Setenv("TOTAL_PRODUCTS", "1")
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+
+		//Resetting State pollution from previous tests.
+		rdb.Del(ctx, shared.WaitListQueue)
+		rdb.Set(ctx, shared.TotalPaid, 0, 0)
+
+		_, err = rdb.Set(context.Background(), shared.Reservations, 1, 0).Result()
+		os.Setenv("TOTAL_PRODUCTS", "1")
+		require.NoError(t, err)
+
+		//set reservation in redis to 1.
+		userUUID1 := uuid.New().String()
+		phoneUUID1 := uuid.New().String()
+		body1 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID1, userUUID1)
+
+		userUUID2 := uuid.New().String()
+		phoneUUID2 := uuid.New().String()
+		body2 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID2, userUUID2)
+
+		//user A makes successful reservation
+		//user B gets waiting list.
+		ticketUUID1 := doReservation(t, body1, shared.SuccessfulReservation)
+		ticketUUID2 := doReservation(t, body2, shared.WaitingList)
+
+		//user A does successful payment
+		payload := fmt.Sprintf(`{
+			"type": "checkout.session.completed",
+			"data": {
+				"object": {
+					"id": "pi_test_123",
+					"amount_total": 1000,
+					"currency": "usd",
+					"payment_status": "%s",
+					"metadata": {
+						"ticketUUID": "%s",
+						"phoneUUID": "%s",
+						"userUUID": "%s"
+					}
+				}
+			}
+		}`, shared.StripePaid, ticketUUID1, phoneUUID1, userUUID1)
+
+		testSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+
+		signedPayload := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
+			Payload: []byte(payload),
+			Secret:  testSecret,
+		})
+
+		//create a post request http, with webhook endpoint, attaching releavant stuff asheaders
+		req, err := http.NewRequest("POST", "http://localhost:8080/webhook", bytes.NewBuffer(signedPayload.Payload))
+		require.NoError(t, err)
+		req.Header.Set("Stripe-Signature", signedPayload.Header)
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		//user B polling should get "SOLD_OUT"
+		require.Eventually(t, func() bool {
+			resp, err := http.Get(fmt.Sprintf("http://localhost:8080/status/%s", ticketUUID2))
+			if err != nil {
+				return false // Network error, try again on the next tick
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return false // Not 200 OK yet, try again
+			}
+
+			statusRespBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return false // Error reading body, try again
+			}
+
+			var statusResponse map[string]string
+			if err := json.Unmarshal(statusRespBody, &statusResponse); err != nil {
+				return false // Error parsing JSON, try again
+			}
+
+			// If it matches, this returns true and the test immediately passes!
+			return statusResponse["status"] == shared.SoldOut
+
+		}, 15*time.Second, 500*time.Millisecond, "Expected status to become SOLD_OUT within 15 seconds")
+
+	})
+
+	t.Run("Duplicate Buy Now requests", func(t *testing.T) {
+		userUUID := uuid.New().String()
+		phoneUUID := uuid.New().String()
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
+
+		resp, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body)))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		buyRespBody, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		var buyResponse map[string]string
+		err = json.Unmarshal(buyRespBody, &buyResponse)
+		require.NoError(t, err)
+
+		// {"ticketUUID": x, "status":y}
+		require.Equal(t, shared.Pending, buyResponse["status"])
+		require.NotEmpty(t, buyResponse["ticketUUID"])
+
+		resp2, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body)))
+		require.NoError(t, err)
+		defer resp2.Body.Close()
+		require.Equal(t, http.StatusConflict, resp2.StatusCode)
+
+	})
+
+	//same user buying 2 different phones
+	t.Run("Same User buy 2 different phones", func(t *testing.T) {
+		userUUID := uuid.New().String()
+		phoneUUID := uuid.New().String()
+		phoneUUID2 := uuid.New().String()
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
+		body2 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID2, userUUID)
+
+		resp, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body)))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		buyRespBody, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		var buyResponse map[string]string
+		err = json.Unmarshal(buyRespBody, &buyResponse)
+		require.NoError(t, err)
+
+		// {"ticketUUID": x, "status":y}
+		require.Equal(t, shared.Pending, buyResponse["status"])
+		require.NotEmpty(t, buyResponse["ticketUUID"])
+
+		resp2, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body2)))
+		require.NoError(t, err)
+		defer resp2.Body.Close()
+		require.Equal(t, http.StatusOK, resp2.StatusCode)
+
+		buyRespBody2, err := io.ReadAll(resp2.Body)
+		require.NoError(t, err)
+
+		var buyResponse2 map[string]string
+		err = json.Unmarshal(buyRespBody2, &buyResponse2)
+		require.NoError(t, err)
+
+		// {"ticketUUID": x, "status":y}
+		require.Equal(t, shared.Pending, buyResponse2["status"])
+		require.NotEmpty(t, buyResponse2["ticketUUID"])
+
+		require.NotEqual(t, buyResponse["ticketUUID"], buyResponse2["ticketUUID"])
+	})
 }
 
 func doReservation(t *testing.T, body string, status string) string {
@@ -711,6 +882,8 @@ func setUpTestEnv(t *testing.T, ctx context.Context) TestEnv {
 	os.Setenv("POSTGRES_USER", "user")
 	os.Setenv("POSTGRES_PASSWORD", "password")
 	os.Setenv("POSTGRES_DB", "users")
+
+	os.Setenv("TOTAL_PRODUCTS", "10")
 
 	postgresContainer, err := postgres.Run(ctx,
 		"postgres:16-alpine",
