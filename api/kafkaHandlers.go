@@ -22,12 +22,22 @@ import (
 
 func buyRequest(rdb *redis.Client, reservationWriter *kafka.Writer) gin.HandlerFunc {
 	return func(c *gin.Context) {
+
 		var body shared.ReservationEvent
 		c.BindJSON(&body)
+
+		key := body.UserUUID + ":" + body.PhoneUUID
+
+		existing, err := rdb.Get(context.Background(), key).Result()
+		if err == nil && existing != "" {
+			c.JSON(409, gin.H{"error": "request already in flight"})
+			return
+		}
 
 		//generate a ticketUUID and pass it in body
 		ticketUUID := uuid.New().String()
 		body.TicketUUID = ticketUUID
+		rdb.Set(context.Background(), key, ticketUUID, 10*time.Minute)
 
 		b, _ := json.Marshal(body)
 
