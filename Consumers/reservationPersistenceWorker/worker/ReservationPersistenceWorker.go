@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"myproject/shared"
 	"os"
 	"time"
 
@@ -46,15 +47,15 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress},
-		Topic:   "Reservation-successful",
-		GroupID: "InsertionToSQL-group",
+		Topic:   shared.TopicReservationSuccessful,
+		GroupID: shared.TopicReservationSuccessfulGroup,
 	})
 	defer r.Close()
 
 	updateReservationReader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress},
-		Topic:   "Payment-Successful",
-		GroupID: "UpdateToSQL-group",
+		Topic:   shared.TopicPaymentSuccessful,
+		GroupID: shared.TopicPaymentSuccessfulGroup,
 	})
 	defer updateReservationReader.Close()
 
@@ -143,13 +144,13 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 					if err == nil && rowsAffected > 0 {
 						slog.Info("Success! Ticket updated to PAID", "ticketID", event.TicketUUID, "attempt", i)
 						success = true
-						err = rdb.Set(ctx, event.TicketUUID, "PAID", 0).Err()
+						err = rdb.Set(ctx, event.TicketUUID, shared.Paid, 0).Err()
 						if err != nil {
 							slog.Error("failed to set redis key", "ticketID", event.TicketUUID, "error", err)
 							return
 						}
 
-						totalPaid, err := rdb.Incr(ctx, "total_paid").Result()
+						totalPaid, err := rdb.Incr(ctx, shared.TotalPaid).Result()
 
 						if err != nil {
 							slog.Error("failed to increment total_paid", "error", err)
@@ -188,20 +189,10 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	return nil
 }
 
-type PaymentEvent struct {
-	TicketUUID      string `json:"ticketUUID"`
-	PhoneUUID       string `json:"phoneUUID"`
-	UserUUID        string `json:"userUUID"`
-	PaymentIntentID string `json:"paymentIntentID"`
-	Amount          int64  `json:"amount"`
-	Currency        string `json:"currency"`
-	Status          string `json:"status"`
-}
-
 func soldOut(ctx context.Context, rdb *redis.Client) {
 
 	for {
-		ticketUUID, err := rdb.LPop(ctx, "waitlist_queue").Result()
+		ticketUUID, err := rdb.LPop(ctx, shared.WaitListQueue).Result()
 
 		if err == redis.Nil {
 			break // The list is completely empty, exit the loop
@@ -211,7 +202,7 @@ func soldOut(ctx context.Context, rdb *redis.Client) {
 			slog.Error("Redis error during LPop", "error", err)
 			continue // Skip if there's a weird network error
 		}
-		err = rdb.Set(ctx, ticketUUID, "SOLD_OUT", 0).Err()
+		err = rdb.Set(ctx, ticketUUID, shared.SoldOut, 0).Err()
 		if err != nil {
 			slog.Error("Failed to set ticket as SOLD_OUT", "ticketID", ticketUUID, "error", err)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"myproject/shared"
 	"os"
 
 	"github.com/segmentio/kafka-go"
@@ -16,23 +17,23 @@ func PaymentWorker(ctx context.Context) error {
 
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  []string{kafkaBrokerAddress},
-		Topic:    "Payment-Successful",
+		Topic:    shared.TopicPaymentSuccessful,
 		Balancer: &kafka.Hash{},
 	})
 	defer w.Close()
 
 	rollBackWriter := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  []string{kafkaBrokerAddress},
-		Topic:    "Payment-Failed",
+		Topic:    shared.TopicPaymentFailure,
 		Balancer: &kafka.Hash{},
 	})
 	defer rollBackWriter.Close()
 
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: []string{kafkaBrokerAddress}, //TODO: this is hardcoded, need to fix that
-		Topic:   "Payment",
-		GroupID: "Payment-group",
+		Brokers: []string{kafkaBrokerAddress},
+		Topic:   shared.TopicPayment,
+		GroupID: shared.TopicPaymentGroup,
 	})
 	defer r.Close()
 
@@ -74,7 +75,7 @@ func PaymentWorker(ctx context.Context) error {
 			continue
 		}
 
-		if paymentMessage.Status == "paid" {
+		if paymentMessage.Status == shared.StripePaid {
 
 			err := w.WriteMessages(
 				ctx,
@@ -98,16 +99,6 @@ func PaymentWorker(ctx context.Context) error {
 		}
 	}
 
-}
-
-type PaymentEvent struct {
-	TicketUUID      string `json:"ticketUUID"`
-	PhoneUUID       string `json:"phoneUUID"`
-	UserUUID        string `json:"userUUID"`
-	PaymentIntentID string `json:"paymentIntentID"`
-	Amount          int64  `json:"amount"`
-	Currency        string `json:"currency"`
-	Status          string `json:"status"`
 }
 
 // When you use json.Unmarshal into a struct, extra fields in the JSON are ignored automatically.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	producer "myproject/Producer"
+	"myproject/shared"
 	"net/http"
 	"os"
 	"strings"
@@ -45,12 +46,12 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		DB:       0,  // use default DB
 	})
 	defer rdb.Close()
-	paymentCancelledWriter := createWriter(kafkaBrokerAddress, "Payment-Failed")
+	paymentCancelledWriter := createWriter(kafkaBrokerAddress, shared.TopicPaymentFailure)
 	defer paymentCancelledWriter.Close()
 	go pollExpiredTimers(ctx, rdb, paymentCancelledWriter)
 
 	// prefill it in redis (POTENTIAL ERROR, if main shuts down and runs again, refill happens even when not supposed to happen)
-	_, err := rdb.Set(context.Background(), "reservation", 10, 0).Result()
+	_, err := rdb.Set(context.Background(), shared.Reservations, 10, 0).Result()
 	if err != nil {
 		return fmt.Errorf("redis error: %w", err)
 	}
@@ -80,8 +81,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		AllowCredentials: true,
 	}))
 
-	reservationWriter := createWriter(kafkaBrokerAddress, "Reservations")
-	paymentWriter := createWriter(kafkaBrokerAddress, "Payment")
+	reservationWriter := createWriter(kafkaBrokerAddress, shared.TopicReservation)
+	paymentWriter := createWriter(kafkaBrokerAddress, shared.TopicPayment)
 	defer reservationWriter.Close()
 	defer paymentWriter.Close()
 
@@ -169,7 +170,7 @@ func convertToBytes(data any) ([]byte, error) {
 
 func StartTimer(ctx context.Context, rdb *redis.Client, memberData string, ttl time.Duration) error {
 	expireTime := float64(time.Now().Add(ttl).Unix())
-	err := rdb.ZAdd(ctx, "flash_sale_timers", redis.Z{
+	err := rdb.ZAdd(ctx, shared.FlashSaleTimers, redis.Z{
 		Score:  expireTime,
 		Member: memberData, // The data you want to retrieve later
 	}).Err()
@@ -188,7 +189,7 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 			time.Sleep(500 * time.Millisecond) //added timer here so CPU is not busy 100% of the time
 			currentTime := float64(time.Now().Unix())
 			list, err := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
-				Key:     "flash_sale_timers",
+				Key:     shared.FlashSaleTimers,
 				Start:   "-inf",
 				Stop:    fmt.Sprintf("%f", currentTime),
 				ByScore: true,
@@ -204,7 +205,7 @@ func pollExpiredTimers(ctx context.Context, rdb *redis.Client, paymentCancelledW
 				//get the list
 				for _, memberString := range list {
 					// .Val() returns the number of items deleted (1 if success, 0 if another worker beat us to it)
-					removed := rdb.ZRem(ctx, "flash_sale_timers", memberString).Val()
+					removed := rdb.ZRem(ctx, shared.FlashSaleTimers, memberString).Val()
 
 					//create a payment ,message with everything null, but ticket id phone uuid, status and user uuid filled
 

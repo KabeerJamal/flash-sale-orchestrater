@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	producer "myproject/Producer"
+	"myproject/shared"
 	"net/http"
 	"os"
 	"time"
@@ -35,7 +36,7 @@ func buyRequest(rdb *redis.Client, reservationWriter *kafka.Writer) gin.HandlerF
 		//put ticketUUID and status in redis
 		rdb.Set(context.Background(), ticketUUID, "PENDING", 0).Err()
 
-		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": "PENDING"}) //Immediate response with ticket ID and status as pending
+		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": shared.Pending}) //Immediate response with ticket ID and status as pending
 	}
 
 }
@@ -164,7 +165,7 @@ func handleWebhook(rdb *redis.Client, ctx context.Context, paymentWriter *kafka.
 			}
 			//Idempotency Check
 			val, err := rdb.Get(ctx, stripeData.TicketUUID).Result()
-			if err == nil && val == "PAID" {
+			if err == nil && val == shared.Paid {
 				//already processed this exact payment
 				c.Status(http.StatusOK) // Tell Stripe "thanks, we got it"
 				return
@@ -189,7 +190,7 @@ func handleWebhook(rdb *redis.Client, ctx context.Context, paymentWriter *kafka.
 			}
 			//idempotency check, doesnt cover all cases
 			val, err := rdb.Get(ctx, stripeData.TicketUUID).Result()
-			if err == nil && val == "FAILED" {
+			if err == nil && val == shared.Failed {
 				//already processed this exact payment
 				c.Status(http.StatusOK) // Tell Stripe "thanks, we got it"
 				return
@@ -215,7 +216,7 @@ func handleWebhook(rdb *redis.Client, ctx context.Context, paymentWriter *kafka.
 			//idempotency check, doesnt cover all cases
 			//idempotency check, doesnt cover all cases
 			val, err := rdb.Get(ctx, stripeData.TicketUUID).Result()
-			if err == nil && val == "FAILED" {
+			if err == nil && val == shared.Failed {
 				//already processed this exact payment
 				c.Status(http.StatusOK) // Tell Stripe "thanks, we got it"
 				return

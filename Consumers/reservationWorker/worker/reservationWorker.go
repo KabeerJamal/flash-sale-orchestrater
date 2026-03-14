@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"myproject/shared"
 	"os"
 
 	"github.com/redis/go-redis/v9"
@@ -32,8 +33,8 @@ func ReservationWorker(ctx context.Context) error {
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress}, //TODO: this is hardcoded, need to fix that
-		Topic:   "Reservations",
-		GroupID: "Reservation-group",
+		Topic:   shared.TopicReservation,
+		GroupID: shared.TopicReservationGroup,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,7 +109,7 @@ func ReservationWorker(ctx context.Context) error {
 			*/
 			userUUID := data["userUUID"]
 			phoneUUID := data["phoneUUID"]
-			rdb.Set(ctx, ticketUUID, "WAITING_LIST", 0).Err()
+			rdb.Set(ctx, ticketUUID, shared.WaitingList, 0).Err()
 			memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
 			rdb.RPush(ctx, "waitlist_queue", memberData)
 		} else {
@@ -126,7 +127,7 @@ func ReservationWorker(ctx context.Context) error {
 			}
 
 			//update redis too
-			err = rdb.Set(ctx, ticketUUID, "SUCCESSFUL_RESERVATION", 0).Err()
+			err = rdb.Set(ctx, ticketUUID, shared.SuccessfulReservation, 0).Err()
 			if err != nil {
 				slog.Error("Failed to update reservation status in redis",
 					"ticketUUID", ticketUUID,
