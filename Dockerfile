@@ -6,6 +6,7 @@ COPY go.mod go.sum /app
 RUN go mod download
 
 COPY ./Consumers /app/Consumers
+COPY ./shared /app/shared 
 
 
 ## FOR PRODUCTION DO MULTI STAGE
