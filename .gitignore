@@ -12,3 +12,4 @@ env
 /vendor/  
 
 /frontend/node_modules
+./vscode
