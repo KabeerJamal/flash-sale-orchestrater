@@ -11,7 +11,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// TODO: manual work that needs to be done, set up redis reservations , and set up topics for kafka
+// TODO: manual work that needs to be done, and set up topics for kafka with partitions
 // this should be automated
 func main() {
 	//---FETCHING ENVIORMENT VARIABLES---
