@@ -737,6 +737,60 @@ func TestIntegrationPipeline(t *testing.T) {
 
 		require.NotEqual(t, buyResponse["ticketUUID"], buyResponse2["ticketUUID"])
 	})
+
+	t.Run("Idempotency Check for reservationWorker", func(t *testing.T) {
+
+		var event shared.ReservationEvent
+
+		event.TicketUUID = uuid.New().String()
+		event.PhoneUUID = uuid.New().String()
+		event.UserUUID = uuid.New().String()
+
+		eventBytes, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		w := kafka.NewWriter(kafka.WriterConfig{
+			Brokers: []string{env.brokerAddress},
+			Topic:   shared.TopicReservation,
+			//Balancer: &kafka.LeastBytes{},
+			Balancer: &kafka.Hash{},
+		})
+
+		w.WriteMessages(
+			ctx,
+			kafka.Message{
+				Key:   []byte(event.TicketUUID),
+				Value: eventBytes,
+			},
+		)
+		w.WriteMessages(
+			ctx,
+			kafka.Message{
+				Key:   []byte(event.TicketUUID),
+				Value: eventBytes,
+			},
+		)
+
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+
+		initialStock, _ := strconv.Atoi(os.Getenv("TOTAL_PRODUCTS"))
+
+		require.Eventually(t, func() bool {
+			stockStr, _ := rdb.Get(ctx, "reservation").Result()
+			stock, _ := strconv.Atoi(stockStr)
+			return stock == initialStock-1
+		}, 10*time.Second, 500*time.Millisecond)
+
+	})
 }
 
 func doReservation(t *testing.T, body string, status string) string {
