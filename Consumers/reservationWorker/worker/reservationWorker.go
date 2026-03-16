@@ -62,29 +62,29 @@ func ReservationWorker(ctx context.Context) error {
 		}
 		ticketUUID := data.TicketUUID
 
-		// Idempotency Check
-		status, err := rdb.Get(ctx, ticketUUID).Result()
-		if err == nil && (status == shared.SuccessfulReservation || status == shared.WaitingList) && !data.Promoted {
-			slog.Info("Duplicate message for ticket, skipping", "ticketID", ticketUUID, "status", status)
-			continue // Skip processing!
-		}
-
 		//You send message to two places, frontend(via redis) and backend(using redpanda)
 		// if reservation in redis is less than 10, do reservation in redis 10 - 1. Send message to kafka for new topic
+		//[Idempotency] Previous script was not idempotent
 		script := redis.NewScript(`
 			local stock = tonumber(redis.call("GET", KEYS[1]))
 			if stock == nil then
 				return -2
 			end
 
+			-- [Idempotency] SET NX ensures only first execution sets this
+			if redis.call("SET", KEYS[2], ARGV[1], "NX") == false then
+				return -3 
+			end
+
 			if stock <= 0 then
 				return -1
 			end
-
+	
 			return redis.call("DECR", KEYS[1])
 		`) // script is basically -2,-1 or remaining stock after decrement
 
-		res, err := script.Run(ctx, rdb, []string{"reservation"}).Result()
+		//[Idempotency]
+		res, err := script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID}, shared.SuccessfulReservation).Result()
 		if err != nil {
 			slog.Error("Some problem with redis database", "error", err)
 			return err
@@ -112,6 +112,9 @@ func ReservationWorker(ctx context.Context) error {
 			rdb.Set(ctx, ticketUUID, shared.WaitingList, 0).Err()
 			memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
 			rdb.RPush(ctx, "waitlist_queue", memberData)
+		} else if n == -3 { //[Idempotency]
+			slog.Info("Duplicate message, idempotency check blocked", "ticketUUID", ticketUUID)
+			continue
 		} else {
 
 			err = w.WriteMessages(
@@ -124,15 +127,6 @@ func ReservationWorker(ctx context.Context) error {
 			)
 			if err != nil {
 				slog.Error("failed to write message", "error", err)
-			}
-
-			//update redis too
-			err = rdb.Set(ctx, ticketUUID, shared.SuccessfulReservation, 0).Err()
-			if err != nil {
-				slog.Error("Failed to update reservation status in redis",
-					"ticketUUID", ticketUUID,
-					"error", err,
-				)
 			}
 		}
 
