@@ -23,13 +23,6 @@ func ReservationWorker(ctx context.Context) error {
 	})
 	defer rdb.Close()
 
-	w := kafka.NewWriter(kafka.WriterConfig{
-		Brokers: []string{kafkaBrokerAddress},
-		Topic:   shared.TopicReservationSuccessful,
-		//Balancer: &kafka.LeastBytes{},
-		Balancer: &kafka.Hash{},
-	})
-
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{kafkaBrokerAddress}, //TODO: this is hardcoded, need to fix that
@@ -72,19 +65,27 @@ func ReservationWorker(ctx context.Context) error {
 			end
 
 			-- [Idempotency] SET NX ensures only first execution sets this
-			if redis.call("SET", KEYS[2], ARGV[1], "NX") == false then
-				return -3 
+			if redis.call("GET", KEYS[2]) ~= "PENDING" then
+				return -3
 			end
+			redis.call("SET", KEYS[2], ARGV[1])
 
 			if stock <= 0 then
 				return -1
 			end
-	
+
+			-- [AllOrNothing] Outbox pattern - store Kafka message atomically before publishing
+			redis.call("HSET", KEYS[3], "topic", ARGV[2], "key", ARGV[3], "value", ARGV[4])
+
 			return redis.call("DECR", KEYS[1])
 		`) // script is basically -2,-1 or remaining stock after decrement
 
-		//[Idempotency]
-		res, err := script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID}, shared.SuccessfulReservation).Result()
+		//[Idempotency][AllOrNothing]
+		res, err := script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID, "outbox:" + ticketUUID},
+			shared.SuccessfulReservation, shared.TopicReservationSuccessful,
+			string(msg.Key),
+			string(msg.Value)).Result()
+
 		if err != nil {
 			slog.Error("Some problem with redis database", "error", err)
 			return err
@@ -116,18 +117,8 @@ func ReservationWorker(ctx context.Context) error {
 			slog.Info("Duplicate message, idempotency check blocked", "ticketUUID", ticketUUID)
 			continue
 		} else {
-
-			err = w.WriteMessages(
-				ctx,
-
-				kafka.Message{
-					Key:   msg.Key,
-					Value: msg.Value,
-				},
-			)
-			if err != nil {
-				slog.Error("failed to write message", "error", err)
-			}
+			// [AllOrNothing] Outbox worker handles Kafka publish
+			// Nothing to do here - outbox entry written atomically in Lua script
 		}
 
 	}
