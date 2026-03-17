@@ -14,6 +14,7 @@ import (
 	"strconv"
 
 	"log/slog"
+	outboxWorker "myproject/Consumers/outboxWorker/worker"
 	paymentWorker "myproject/Consumers/paymentWorker/worker"
 	reservationPersistenceWorker "myproject/Consumers/reservationPersistenceWorker/worker"
 	reservationWorker "myproject/Consumers/reservationWorker/worker"
@@ -92,9 +93,9 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	//post request followed by get request
 	t.Run("successful reservation flow", func(t *testing.T) {
-		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"}`
-		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a90"
-		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e41"
+		userUUID := uuid.New().String()
+		phoneUUID := uuid.New().String()
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		//test redis check
 		host, err := redisC.Host(ctx)
@@ -120,27 +121,38 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.Equal(t, initialValueRedisReservationInt, valInt+1)
 
 		//--TEST IF INSERTION HAPPENS
-		// 1. Declare variables to hold the data we read from the database
-		var dbPhoneUUID, dbUserUUID, dbStatus string
+		// // 1. Declare variables to hold the data we read from the database
+		// var dbPhoneUUID, dbUserUUID, dbStatus string
 
-		// 2. Query the database using the ticketUUID, and scan the results into our variables
-		err = db.QueryRow(
-			"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
-			ticketUUID,
-		).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
-		require.NoError(t, err) // Fails the test if the row doesn't exist or query fails
+		// // 2. Query the database using the ticketUUID, and scan the results into our variables
+		// err = db.QueryRow(
+		// 	"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+		// 	ticketUUID,
+		// ).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+		// require.NoError(t, err) // Fails the test if the row doesn't exist or query fails
 
-		// 3. Verify the database values match the values from our HTTP request
-		require.Equal(t, phoneUUID, dbPhoneUUID)
-		require.Equal(t, userUUID, dbUserUUID)
-		require.Equal(t, "RESERVED", dbStatus)
+		// // 3. Verify the database values match the values from our HTTP request
+		// require.Equal(t, phoneUUID, dbPhoneUUID)
+		// require.Equal(t, userUUID, dbUserUUID)
+		// require.Equal(t, "RESERVED", dbStatus)
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				ticketUUID,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if err != nil {
+				return false
+			}
+			return dbPhoneUUID == phoneUUID && dbUserUUID == userUUID && dbStatus == "RESERVED"
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
 
 	})
 
 	t.Run("successful payment flow", func(t *testing.T) {
-		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a91" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e42"}`
-		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a91"
-		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e42"
+		userUUID := uuid.New().String()
+		phoneUUID := uuid.New().String()
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
@@ -240,9 +252,9 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	t.Run("Unsuccessful payment flow", func(t *testing.T) {
 
-		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a93" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e44"}`
-		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a93"
-		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e44"
+		userUUID := uuid.New().String()
+		phoneUUID := uuid.New().String()
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
@@ -899,6 +911,12 @@ func startWorkers(t *testing.T, ctx context.Context) {
 
 	go func() {
 		err := rollbackWorker.RollbackWorker(ctx)
+		if err != nil {
+			t.Logf("Rollback stopped: %v", err)
+		}
+	}()
+	go func() {
+		err := outboxWorker.OutboxWorker(ctx)
 		if err != nil {
 			t.Logf("Rollback stopped: %v", err)
 		}
