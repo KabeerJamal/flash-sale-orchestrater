@@ -6,6 +6,7 @@ const (
 	TopicPayment               = "Payment"
 	TopicPaymentSuccessful     = "Payment-Successful"
 	TopicPaymentFailure        = "Payment-Failed"
+	TopicDeadLetterQueue       = "Dead-Letter-Queue"
 
 	TopicReservationGroup           = "Reservation-group"
 	TopicReservationSuccessfulGroup = "InsertionToSQL-group"
