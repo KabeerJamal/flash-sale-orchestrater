@@ -15,12 +15,12 @@ func StartProducer(w *kafka.Writer, key string, message []byte) {
 	err := w.WriteMessages(
 		context.Background(),
 		kafka.Message{
-			Key:   []byte(key), //TODO: hardcoded, need to fix this.
+			Key:   []byte(key),
 			Value: message,
 		},
 	)
 	if err != nil {
-		panic(err)
+		println("failed to write to kafka: %w", err)
 	} else {
 		println("Message Sent")
 	}
