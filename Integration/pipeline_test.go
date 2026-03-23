@@ -430,7 +430,15 @@ func TestIntegrationPipeline(t *testing.T) {
 			Addr: host + ":" + port.Port(),
 		})
 		_, err = rdb.Set(context.Background(), shared.Reservations, 0, 0).Result()
+		oldValue, existed := os.LookupEnv("TOTAL_PRODUCTS")
 		os.Setenv("TOTAL_PRODUCTS", "0")
+		defer func() {
+			if existed {
+				os.Setenv("TOTAL_PRODUCTS", oldValue) // restore previous value
+			} else {
+				os.Unsetenv("TOTAL_PRODUCTS") // remove if it wasn’t set before
+			}
+		}()
 		require.NoError(t, err)
 
 		doReservation(t, body, shared.WaitingList)
@@ -453,7 +461,15 @@ func TestIntegrationPipeline(t *testing.T) {
 		})
 		rdb.Del(ctx, shared.WaitListQueue)
 		_, err = rdb.Set(context.Background(), shared.Reservations, 1, 0).Result()
+		oldValue, existed := os.LookupEnv("TOTAL_PRODUCTS")
 		os.Setenv("TOTAL_PRODUCTS", "1")
+		defer func() {
+			if existed {
+				os.Setenv("TOTAL_PRODUCTS", oldValue) // restore previous value
+			} else {
+				os.Unsetenv("TOTAL_PRODUCTS") // remove if it wasn’t set before
+			}
+		}()
 		require.NoError(t, err)
 
 		//need 2 users
@@ -562,7 +578,6 @@ func TestIntegrationPipeline(t *testing.T) {
 	})
 
 	t.Run("Product Sold out", func(t *testing.T) {
-		os.Setenv("TOTAL_PRODUCTS", "1")
 		host, err := redisC.Host(ctx)
 		require.NoError(t, err)
 
@@ -577,7 +592,15 @@ func TestIntegrationPipeline(t *testing.T) {
 		rdb.Set(ctx, shared.TotalPaid, 0, 0)
 
 		_, err = rdb.Set(context.Background(), shared.Reservations, 1, 0).Result()
+		oldValue, existed := os.LookupEnv("TOTAL_PRODUCTS")
 		os.Setenv("TOTAL_PRODUCTS", "1")
+		defer func() {
+			if existed {
+				os.Setenv("TOTAL_PRODUCTS", oldValue) // restore previous value
+			} else {
+				os.Unsetenv("TOTAL_PRODUCTS") // remove if it wasn’t set before
+			}
+		}()
 		require.NoError(t, err)
 
 		//set reservation in redis to 1.
