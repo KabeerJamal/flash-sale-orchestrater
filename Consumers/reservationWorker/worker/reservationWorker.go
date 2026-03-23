@@ -24,11 +24,12 @@ func ReservationWorker(ctx context.Context) error {
 	})
 	defer rdb.Close()
 
-	// 1. Create reader config
+	// Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: []string{kafkaBrokerAddress}, //TODO: this is hardcoded, need to fix that
-		Topic:   shared.TopicReservation,
-		GroupID: shared.TopicReservationGroup,
+		Brokers:        []string{kafkaBrokerAddress},
+		Topic:          shared.TopicReservation,
+		GroupID:        shared.TopicReservationGroup,
+		CommitInterval: 0, // disables auto-commit
 	})
 	defer r.Close()
 
@@ -42,38 +43,10 @@ func ReservationWorker(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// consume forever
-	for {
-		msg, err := r.ReadMessage(ctx) //this is blocking
-
-		//DLQ is for messages that can't be processed. If Kafka is down, you have no message, you just wait/retry until Kafka comes back.
-		if err != nil {
-			slog.Error("Error while reading message", "error", err)
-			return err
-		}
-
-		// print message..
-		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
-
-		var data shared.ReservationEvent
-
-		err = json.Unmarshal(msg.Value, &data)
-		//[DLQ]
-		if err != nil {
-			slog.Error("Error unmarshaling JSON", "error", err)
-			dlqWriter.WriteMessages(ctx, kafka.Message{
-				Key:   msg.Key,
-				Value: msg.Value,
-			})
-			//Dont put return cause then one bad message takes down the whole system
-			continue //Send to DLQ + commit. What would retrying a malformed JSON message accomplish?
-		}
-		ticketUUID := data.TicketUUID
-
-		//You send message to two places, frontend(via redis) and backend(using redpanda)
-		// if reservation in redis is less than 10, do reservation in redis 10 - 1. Send message to kafka for new topic
-		//[Idempotency] Previous script was not idempotent
-		script := redis.NewScript(`
+	//You send message to two places, frontend(via redis) and backend(using redpanda)
+	// if reservation in redis is less than 10, do reservation in redis 10 - 1. Send message to kafka for new topic
+	//[Idempotency] Previous script was not idempotent
+	script := redis.NewScript(`
 			local stock = tonumber(redis.call("GET", KEYS[1]))
 			if stock == nil then
 				return -2
@@ -95,6 +68,38 @@ func ReservationWorker(ctx context.Context) error {
 			return redis.call("DECR", KEYS[1])
 		`) // script is basically -2,-1 or remaining stock after decrement
 
+	//[AllOrNothing]
+	waitlistScript := redis.NewScript(`
+				redis.call("SET", KEYS[1], ARGV[1])
+				redis.call("RPUSH", KEYS[2], ARGV[2])
+				return 1
+			`)
+
+	// consume forever
+	for {
+		msg, err := r.FetchMessage(ctx) //this is blocking
+
+		//DLQ is for messages that can't be processed. If Kafka is down, you have no message, you just wait/retry until Kafka comes back.
+		if err != nil {
+			slog.Error("Error while reading message", "error", err)
+			return err
+		}
+
+		// print message..
+		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
+
+		var data shared.ReservationEvent
+
+		err = json.Unmarshal(msg.Value, &data)
+		//[DLQ][MANUAL COMMITS]
+		if err != nil {
+			slog.Error("Error unmarshaling JSON", "error", err)
+			shared.SendToDLQ(ctx, dlqWriter, r, msg)
+			//Dont put return cause then one bad message takes down the whole system
+			continue //Send to DLQ + commit. What would retrying a malformed JSON message accomplish?
+		}
+		ticketUUID := data.TicketUUID
+
 		//[Idempotency][AllOrNothing]
 		var res interface{}
 		err = shared.RetryExternal(5, func() error {
@@ -106,24 +111,18 @@ func ReservationWorker(ctx context.Context) error {
 		})
 		if err != nil {
 			slog.Error("Some problem with redis database", "error", err)
-			//[DLQ]
-			dlqWriter.WriteMessages(ctx, kafka.Message{
-				Key:   msg.Key,
-				Value: msg.Value,
-			})
+			//[DLQ][MANUAL COMMITS]
+			shared.SendToDLQ(ctx, dlqWriter, r, msg)
 			continue // outer message loop
 
 		}
 
 		// Redis returns numbers as int64 through go-redis
-		//[DLQ]
+		//[DLQ][MANUAL COMMITS]
 		n, ok := res.(int64)
 		if !ok {
 			slog.Error("Unexpected return type from Lua script — TODO: send to DLQ", "result", res)
-			dlqWriter.WriteMessages(ctx, kafka.Message{
-				Key:   msg.Key,
-				Value: msg.Value,
-			})
+			shared.SendToDLQ(ctx, dlqWriter, r, msg)
 			continue // TODO: replace with DLQ publish + commit
 		}
 
@@ -147,12 +146,6 @@ func ReservationWorker(ctx context.Context) error {
 			// rdb.Set(ctx, ticketUUID, shared.WaitingList, 0).Err()
 			memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
 			// rdb.RPush(ctx, "waitlist_queue", memberData)
-			//[AllOrNothing]TODO: Wrap set and Rpush in lua script
-			waitlistScript := redis.NewScript(`
-				redis.call("SET", KEYS[1], ARGV[1])
-				redis.call("RPUSH", KEYS[2], ARGV[2])
-				return 1
-			`)
 
 			err = shared.RetryExternal(5, func() error {
 				_, err = waitlistScript.Run(ctx, rdb, []string{ticketUUID, "waitlist_queue"},
@@ -161,19 +154,23 @@ func ReservationWorker(ctx context.Context) error {
 			})
 			if err != nil {
 				slog.Error("Waitlist script failed after 5 retries", "error", err)
-				//[DLQ]
-				dlqWriter.WriteMessages(ctx, kafka.Message{
-					Key:   msg.Key,
-					Value: msg.Value,
-				})
+				//[DLQ][MANUAL COMMITS]
+				shared.SendToDLQ(ctx, dlqWriter, r, msg)
 				continue
 			}
+			//[MANUAL COMMITS]
+			r.CommitMessages(ctx, msg)
 		} else if n == -3 { //[Idempotency]
 			slog.Info("Duplicate message, idempotency check blocked", "ticketUUID", ticketUUID)
+			//[MANUAL COMMITS]
+			r.CommitMessages(ctx, msg)
 			continue
 		} else {
 			// [AllOrNothing] Outbox worker handles Kafka publish
 			// Nothing to do here - outbox entry written atomically in Lua script
+
+			//[MANUAL COMMITS]
+			r.CommitMessages(ctx, msg)
 		}
 
 	}
