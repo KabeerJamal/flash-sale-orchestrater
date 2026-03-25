@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	producer "myproject/Producer"
 	"myproject/shared"
 	"net/http"
@@ -47,6 +49,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		DB:       0,  // use default DB
 	})
 	defer rdb.Close()
+
 	paymentCancelledWriter := createWriter(kafkaBrokerAddress, shared.TopicPaymentFailure)
 	defer paymentCancelledWriter.Close()
 	go pollExpiredTimers(ctx, rdb, paymentCancelledWriter)
@@ -88,6 +91,19 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	defer reservationWriter.Close()
 	defer paymentWriter.Close()
 
+	db, err := sql.Open("pgx", connStr)
+
+	if err != nil {
+		slog.Error("DB connection not established", "error", err)
+	}
+
+	err = db.Ping()
+	if err != nil {
+		slog.Error("DB Ping failed", "error", err)
+	}
+
+	defer db.Close()
+
 	r.POST("/buy-request", buyRequest(rdb, reservationWriter))
 
 	r.GET("/status/:ticketId", getTicketStatus(rdb))
@@ -108,6 +124,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	r.GET("/phones", getPhones())
 
 	r.GET("/phones/:phoneUUID/status", getPhoneStatus())
+
+	r.POST("/reset", loadTestingTearDown(rdb, db))
 
 	/*r.Run() is an infinite loop. It completely ignores the ctx context.
 	Context you passed in, and it will block your test forever.
