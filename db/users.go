@@ -40,7 +40,7 @@ func GetUsers() ([]User, error) {
 
 	defer db.Close()
 
-	res, err := db.Query("SELECT * FROM USERS LIMIT 10;")
+	res, err := db.Query("SELECT * FROM USERS;")
 	if err != nil {
 		slog.Error("DB query error", "error", err)
 	}
