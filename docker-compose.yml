@@ -78,6 +78,22 @@ services:
     deploy:
       replicas: 3
 
+  outboxWorker:
+    image: flash-sale-orchestrater-outbox
+    env_file:
+      - ./.env
+    build:
+      context: .
+      dockerfile: Dockerfile 
+    volumes:
+      - ./Consumers:/app/Consumers     # live hot-reload
+      - ./shared:/app/shared
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file   
+    command: go run ./Consumers/outboxWorker
+    deploy:
+      replicas: 3
+
   paymentWorker:
     image: flash-sale-orchestrater-consumerc
     env_file:
