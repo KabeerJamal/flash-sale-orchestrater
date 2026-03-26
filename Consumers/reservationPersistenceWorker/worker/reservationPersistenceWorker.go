@@ -48,9 +48,10 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 	// 1. Create reader config
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers: []string{kafkaBrokerAddress},
-		Topic:   shared.TopicReservationSuccessful,
-		GroupID: shared.TopicReservationSuccessfulGroup,
+		Brokers:        []string{kafkaBrokerAddress},
+		Topic:          shared.TopicReservationSuccessful,
+		GroupID:        shared.TopicReservationSuccessfulGroup,
+		CommitInterval: 0, // disables auto-commit
 	})
 	defer r.Close()
 
@@ -69,6 +70,13 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	})
 	defer rdb.Close()
 
+	dlqWriter := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  []string{kafkaBrokerAddress},
+		Balancer: &kafka.Hash{},
+		Topic:    shared.TopicDeadLetterQueue,
+	})
+	defer dlqWriter.Close()
+
 	fmt.Println("Consumer B started")
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -77,8 +85,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	//consume forever
 	go func() {
 		for {
-			msg, err := r.ReadMessage(ctx)
-
+			msg, err := r.FetchMessage(ctx)
 			if err != nil {
 				slog.Error("Error while reading message", "error", err)
 				time.Sleep(3 * time.Second)
@@ -90,17 +97,22 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			err = json.Unmarshal(msg.Value, &data)
 			if err != nil {
 				slog.Error("Error unmarshaling JSON", "error", err)
-				continue
+				shared.SendToDLQ(ctx, dlqWriter, r, msg)
+				//Dont put return cause then one bad message takes down the whole system
+				continue //Send to DLQ + commit. What would retrying a malformed JSON message accomplish?
 			}
 
 			// 3. Print message
 			//fmt.Printf("Received message in insertion Worker: key=%s value=%s\n", string(msg.Key), string(msg.Value))
 
-
-
 			//on conflict do nothing is basiaclly idempotency check
+			err = shared.RetryExternal(5, func() error {
 			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data.TicketUUID, data.PhoneUUID, data.UserUUID, "RESERVED")
+				return err
+			})
 			if err != nil {
+				slog.Error("failed to insert reservation", "ticketID", data.TicketUUID, "error", err)
+				shared.SendToDLQ(ctx, dlqWriter, r, msg)
 				continue
 			}
 
@@ -109,8 +121,11 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			})
 			if err != nil {
 				slog.Error("failed to set redis key", "ticketID", data.TicketUUID, "error", err)
+				shared.SendToDLQ(ctx, dlqWriter, r, msg)
 				continue
 			}
+			r.CommitMessages(ctx, msg)
+
 		}
 	}()
 
