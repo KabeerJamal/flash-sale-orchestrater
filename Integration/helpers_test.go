@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -200,6 +202,11 @@ func setUpTestEnv(t *testing.T, ctx context.Context) TestEnv {
 	os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true") //Debug test was not working but now it works. see detials in Notion
 	redisC, err := testcontainers.Run(
 		ctx, "redis:8-alpine",
+		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = nat.PortMap{
+				"6379/tcp": []nat.PortBinding{{HostPort: "6379"}},
+			}
+		}),
 		testcontainers.WithExposedPorts("6379/tcp"),
 		testcontainers.WithWaitStrategy(
 			wait.ForListeningPort("6379/tcp"),
@@ -236,6 +243,11 @@ func setUpTestEnv(t *testing.T, ctx context.Context) TestEnv {
 		postgres.WithUsername(dbUser),
 		postgres.WithPassword(dbPassword),
 		postgres.BasicWaitStrategies(),
+		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = nat.PortMap{
+				"5432/tcp": []nat.PortBinding{{HostPort: "5432"}},
+			}
+		}),
 	)
 	if err != nil {
 		log.Printf("failed to start container: %s", err)
