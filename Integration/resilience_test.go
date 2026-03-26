@@ -114,6 +114,24 @@ func TestHandleFailurePipeline(t *testing.T) {
 			stock, _ := strconv.Atoi(stockStr)
 			return stock == initialStock-1
 		}, 10*time.Second, 500*time.Millisecond)
+		//TODO: You can check DB as well
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				event.TicketUUID,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if err != nil {
+				return false
+			}
+			return dbPhoneUUID == event.PhoneUUID && dbUserUUID == event.UserUUID && dbStatus == "RESERVED"
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
+
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 
 	})
 
