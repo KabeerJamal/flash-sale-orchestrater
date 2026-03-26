@@ -14,6 +14,7 @@ import (
 	reservationWorker "myproject/Consumers/reservationWorker/worker"
 	rollbackWorker "myproject/Consumers/rollbackWorker/worker"
 	"myproject/api"
+	"myproject/db"
 	"myproject/shared"
 	"net"
 	"net/http"
@@ -121,6 +122,7 @@ func startWorkers(t *testing.T, ctx context.Context) {
 		if err != nil {
 			t.Logf("API stopped: %v", err)
 		}
+
 	}()
 
 	go func() {
@@ -156,6 +158,42 @@ func startWorkers(t *testing.T, ctx context.Context) {
 			t.Logf("Rollback stopped: %v", err)
 		}
 	}()
+}
+
+func pollUsersAndPhones() ([]db.User, []db.Phone) {
+	for {
+		users, phones, err := getUsersAndPhones()
+		if err == nil && len(users) > 0 && len(phones) > 0 {
+			return users, phones
+		}
+		fmt.Println("Failed to get users and phones, retrying...", "error", err)
+		time.Sleep(3 * time.Second)
+	}
+}
+
+func getUsersAndPhones() ([]db.User, []db.Phone, error) {
+	usersResp, err := http.Get("http://localhost:8080/users")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer usersResp.Body.Close()
+
+	var users []db.User
+	if err = json.NewDecoder(usersResp.Body).Decode(&users); err != nil {
+		return nil, nil, err
+	}
+
+	phonesResp, err := http.Get("http://localhost:8080/phones")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer phonesResp.Body.Close()
+
+	var phones []db.Phone
+	if err = json.NewDecoder(phonesResp.Body).Decode(&phones); err != nil {
+		return nil, nil, err
+	}
+	return users, phones, nil
 }
 
 func setUpTestEnv(t *testing.T, ctx context.Context) TestEnv {
