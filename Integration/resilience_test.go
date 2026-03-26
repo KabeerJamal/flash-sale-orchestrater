@@ -184,6 +184,37 @@ func TestHandleFailurePipeline(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte(`{broken json`), dlqMsg.Value)
 
+		require.Eventually(t, func() bool {
+			stockStr, _ := rdb.Get(ctx, "reservation").Result()
+			stock, _ := strconv.Atoi(stockStr)
+			return stock == initialStock
+		}, 10*time.Second, 500*time.Millisecond)
+
+		successReader := kafka.NewReader(kafka.ReaderConfig{
+			Brokers: []string{env.brokerAddress},
+			Topic:   shared.TopicReservationSuccessful,
+			GroupID: "test-success-group",
+		})
+		defer successReader.Close()
+		timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_, err = successReader.ReadMessage(timeoutCtx)
+		// We EXPECT a timeout here, because no success message should exist
+		require.ErrorIs(t, err, context.DeadlineExceeded, "Should not have published to success topic")
+
+		verifyCommitReader := kafka.NewReader(kafka.ReaderConfig{
+			Brokers: []string{env.brokerAddress},
+			Topic:   shared.TopicReservation,
+			GroupID: shared.TopicReservationGroup, // Must match the worker's consumer group!
+		})
+		defer verifyCommitReader.Close()
+		verifyCtx, cancelVerify := context.WithTimeout(ctx, 2*time.Second)
+		defer cancelVerify()
+		_, err = verifyCommitReader.ReadMessage(verifyCtx)
+		// We EXPECT a timeout here. If the worker committed the message after sending it
+		// to the DLQ, there will be no uncommitted messages left for this group to read.
+		require.ErrorIs(t, err, context.DeadlineExceeded, "Worker failed to commit the original message")
+
 		t.Cleanup(func() {
 			api.CleanUpFunction(rdb, db)
 		})
