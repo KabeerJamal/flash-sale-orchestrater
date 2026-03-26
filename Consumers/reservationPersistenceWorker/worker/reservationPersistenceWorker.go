@@ -94,19 +94,9 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			}
 
 			// 3. Print message
-			fmt.Printf("Received message in insertion Worker: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+			//fmt.Printf("Received message in insertion Worker: key=%s value=%s\n", string(msg.Key), string(msg.Value))
 
-			//data["phoneUUID"] and data["userUUID"] insertion into db first(ONLY FOR DEMO MODE)
-			//----TEMP CODE---
-			_, err = db.Exec("INSERT INTO USERS (userUUID, userName) VALUES ($1, $2) ON CONFLICT (userUUID) DO NOTHING", data.UserUUID, "Messi")
-			if err != nil {
-				continue
-			}
-			_, err = db.Exec("INSERT INTO PHONES (phoneUUID, phoneName) VALUES ($1, $2) ON CONFLICT (phoneUUID) DO NOTHING", data.PhoneUUID, "Iphone")
-			if err != nil {
-				continue
-			}
-			//---TEMP CODE END---
+
 
 			//on conflict do nothing is basiaclly idempotency check
 			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data.TicketUUID, data.PhoneUUID, data.UserUUID, "RESERVED")

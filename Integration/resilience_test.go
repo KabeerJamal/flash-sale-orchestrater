@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"myproject/shared"
 	"strconv"
 
@@ -65,6 +66,8 @@ func TestHandleFailurePipeline(t *testing.T) {
 
 	startWorkers(t, ctx)
 
+	users, phones := pollUsersAndPhones()
+
 	waitForApi(t)
 
 	/*All test cases for reservation worker */
@@ -78,8 +81,8 @@ func TestHandleFailurePipeline(t *testing.T) {
 		var event shared.ReservationEvent
 
 		event.TicketUUID = uuid.New().String()
-		event.PhoneUUID = uuid.New().String()
-		event.UserUUID = uuid.New().String()
+		event.PhoneUUID = phones[0].PhoneUUID
+		event.UserUUID = users[rand.Intn(len(users))].UserUUID
 
 		eventBytes, err := json.Marshal(event)
 		if err != nil {
@@ -283,8 +286,8 @@ func TestHandleFailurePipeline(t *testing.T) {
 		var event shared.ReservationEvent
 
 		event.TicketUUID = uuid.New().String()
-		event.PhoneUUID = uuid.New().String()
-		event.UserUUID = uuid.New().String()
+		event.PhoneUUID = phones[0].PhoneUUID
+		event.UserUUID = users[rand.Intn(len(users))].UserUUID
 
 		eventBytes, err := json.Marshal(event)
 		if err != nil {

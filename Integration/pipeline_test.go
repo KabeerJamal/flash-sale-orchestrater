@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
@@ -72,6 +71,8 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	startWorkers(t, ctx)
 
+	users, phones := pollUsersAndPhones()
+
 	waitForApi(t)
 
 	//Run possible test cases
@@ -85,8 +86,8 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	//post request followed by get request
 	t.Run("successful reservation flow", func(t *testing.T) {
-		userUUID := uuid.New().String()
-		phoneUUID := uuid.New().String()
+		userUUID := users[rand.Intn(len(users))].UserUUID
+		phoneUUID := phones[0].PhoneUUID
 		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		//test redis check
@@ -148,8 +149,8 @@ func TestIntegrationPipeline(t *testing.T) {
 	})
 
 	t.Run("successful payment flow", func(t *testing.T) {
-		userUUID := uuid.New().String()
-		phoneUUID := uuid.New().String()
+		userUUID := users[rand.Intn(len(users))].UserUUID
+		phoneUUID := phones[0].PhoneUUID
 		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
@@ -256,8 +257,8 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	t.Run("Unsuccessful payment flow", func(t *testing.T) {
 
-		userUUID := uuid.New().String()
-		phoneUUID := uuid.New().String()
+		userUUID := users[rand.Intn(len(users))].UserUUID
+		phoneUUID := phones[0].PhoneUUID
 		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
@@ -369,9 +370,9 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	t.Run("Unsuccessful payment flow(Expired timer)", func(t *testing.T) {
 		//create user id and phone id
-		body := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a95" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e46"}`
-		phoneUUID := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a95"
-		userUUID := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e46"
+		userUUID := users[rand.Intn(len(users))].UserUUID
+		phoneUUID := phones[0].PhoneUUID
+		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 		//do reservation (get ticket uuid)
 		ticketUUID := doReservation(t, body, shared.SuccessfulReservation)
 
@@ -452,8 +453,8 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	//2 more test cases left
 	t.Run("Assigned to wait list", func(t *testing.T) {
-		userUUID := uuid.New().String()
-		phoneUUID := uuid.New().String()
+		userUUID := users[rand.Intn(len(users))].UserUUID
+		phoneUUID := phones[0].PhoneUUID
 		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		//test redis check
@@ -515,13 +516,13 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.NoError(t, err)
 
 		//need 2 users
-		body1 := `{"phoneUUID": "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97" , "userUUID": "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"}`
-		phoneUUID1 := "3f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a97"
-		userUUID1 := "b6a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e47"
+		userUUID1 := users[rand.Intn(len(users))].UserUUID
+		phoneUUID1 := phones[0].PhoneUUID
+		body1 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID1, userUUID1)
 
-		body2 := `{"phoneUUID": "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a98" , "userUUID": "26a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e48"}`
-		phoneUUID2 := "1f9c2b7e-8d41-4f6a-9a2e-5c1b7d8e4a98"
-		userUUID2 := "26a1e3d4-2c7f-4b98-8e15-9d3f6a2c7e48"
+		userUUID2 := users[rand.Intn(len(users))].UserUUID
+		phoneUUID2 := phones[0].PhoneUUID
+		body2 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID2, userUUID2)
 
 		ticketUUID1 := doReservation(t, body1, shared.SuccessfulReservation)
 		ticketUUID2 := doReservation(t, body2, shared.WaitingList)
@@ -634,10 +635,6 @@ func TestIntegrationPipeline(t *testing.T) {
 			Addr: host + ":" + port.Port(),
 		})
 
-		//Resetting State pollution from previous tests.
-		rdb.Del(ctx, shared.WaitListQueue)
-		rdb.Set(ctx, shared.TotalPaid, 0, 0)
-
 		_, err = rdb.Set(context.Background(), shared.Reservations, 1, 0).Result()
 		oldValue, existed := os.LookupEnv("TOTAL_PRODUCTS")
 		os.Setenv("TOTAL_PRODUCTS", "1")
@@ -651,12 +648,12 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.NoError(t, err)
 
 		//set reservation in redis to 1.
-		userUUID1 := uuid.New().String()
-		phoneUUID1 := uuid.New().String()
+		userUUID1 := users[rand.Intn(len(users))].UserUUID
+		phoneUUID1 := phones[0].PhoneUUID
 		body1 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID1, userUUID1)
 
-		userUUID2 := uuid.New().String()
-		phoneUUID2 := uuid.New().String()
+		userUUID2 := users[rand.Intn(len(users))].UserUUID
+		phoneUUID2 := phones[0].PhoneUUID
 		body2 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID2, userUUID2)
 
 		//user A makes successful reservation
