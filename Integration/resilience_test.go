@@ -40,18 +40,6 @@ func TestHandleFailurePipeline(t *testing.T) {
 	postgresContainer := env.postgresContainer
 	testcontainers.CleanupContainer(t, redisC)
 
-	//TODO: if you change anything here, you have to change it in 3 different places. Bad practice.
-	luaScript := redis.NewScript(`
-    local keys = redis.call('KEYS', '*')
-    for _, key in ipairs(keys) do
-        if key ~= ARGV[1] then
-            redis.call('DEL', key)
-        end
-    end
-    redis.call('SET', ARGV[1], ARGV[2])
-    return 1
-	`)
-
 	defer func() {
 		if err := testcontainers.TerminateContainer(redpandaContainer); err != nil {
 			log.Printf("failed to terminate container: %s", err)
@@ -143,14 +131,12 @@ func TestHandleFailurePipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
 
-	t.Run("DLQ Reservation Worker, json.Unmarhsal fails, invalid JSON syntax", func(t *testing.T) {
+	t.Run("DLQ Reservation Worker, json.Unmarhsal fails: invalid JSON syntax", func(t *testing.T) {
 
 		host, err := redisC.Host(ctx)
 		require.NoError(t, err)
@@ -198,9 +184,7 @@ func TestHandleFailurePipeline(t *testing.T) {
 		require.Equal(t, []byte(`{broken json`), dlqMsg.Value)
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
@@ -255,9 +239,7 @@ func TestHandleFailurePipeline(t *testing.T) {
 		require.Equal(t, []byte(`{"ticketUUID":"123","phoneUUID":"456","userUUID":"789","promoted":"notabool"}`), dlqMsg.Value)
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 	})
 

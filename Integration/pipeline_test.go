@@ -10,11 +10,11 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"myproject/api"
 	"myproject/shared"
 	"strconv"
 
 	"log/slog"
-	"myproject/api"
 	"net/http"
 	"os"
 	"testing"
@@ -57,18 +57,6 @@ func TestIntegrationPipeline(t *testing.T) {
 		}
 	}()
 	defer db.Close()
-
-	//TODO: if you change anything here, you have to change it in 3 different places. Bad practice.
-	luaScript := redis.NewScript(`
-    local keys = redis.call('KEYS', '*')
-    for _, key in ipairs(keys) do
-        if key ~= ARGV[1] then
-            redis.call('DEL', key)
-        end
-    end
-    redis.call('SET', ARGV[1], ARGV[2])
-    return 1
-	`)
 
 	startWorkers(t, ctx)
 
@@ -142,9 +130,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
@@ -249,10 +235,10 @@ func TestIntegrationPipeline(t *testing.T) {
 			return dbPhoneUUID == phoneUUID && dbUserUUID == userUUID && dbStatus == "PAID"
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be PAID")
 
+		//TODO: INSTEAD OF SETTING TO 10, SET IT TO WHATEVER ENVIORMENT VARIABLE IS. AND JUST CALL A FUNCTION HERE FOR CLEAN UP INSTEAD
+		//Also USE THAT FUNCTION IN LOAD TESTING, and figure out 1 place for the lua script
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 	})
 
@@ -362,9 +348,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
@@ -445,9 +429,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
@@ -485,9 +467,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.Equal(t, "0", val)
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
@@ -620,9 +600,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be RESERVED")
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 	})
 
@@ -726,9 +704,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		}, 15*time.Second, 500*time.Millisecond, "Expected status to become SOLD_OUT within 15 seconds")
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
@@ -770,9 +746,7 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.Equal(t, http.StatusConflict, resp2.StatusCode)
 
 		t.Cleanup(func() {
-			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-			db.Exec("DELETE FROM RESERVATIONS")
-			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+			api.CleanUpFunction(rdb, db)
 		})
 
 	})
