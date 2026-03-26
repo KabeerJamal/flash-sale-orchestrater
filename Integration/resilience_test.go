@@ -39,6 +39,18 @@ func TestHandleFailurePipeline(t *testing.T) {
 	postgresContainer := env.postgresContainer
 	testcontainers.CleanupContainer(t, redisC)
 
+	//TODO: if you change anything here, you have to change it in 3 different places. Bad practice.
+	luaScript := redis.NewScript(`
+    local keys = redis.call('KEYS', '*')
+    for _, key in ipairs(keys) do
+        if key ~= ARGV[1] then
+            redis.call('DEL', key)
+        end
+    end
+    redis.call('SET', ARGV[1], ARGV[2])
+    return 1
+	`)
+
 	defer func() {
 		if err := testcontainers.TerminateContainer(redpandaContainer); err != nil {
 			log.Printf("failed to terminate container: %s", err)
@@ -136,6 +148,14 @@ func TestHandleFailurePipeline(t *testing.T) {
 	})
 
 	t.Run("DLQ Reservation Worker, json.Unmarhsal fails, invalid JSON syntax", func(t *testing.T) {
+
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
 		/*
 			Invalid JSON syntax — {broken json
 			Wrong type — field expects bool but gets "hello"
@@ -174,11 +194,25 @@ func TestHandleFailurePipeline(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte(`{broken json`), dlqMsg.Value)
 
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
+
 	})
 
-	// TODO: Potential problem — both DLQ test cases share the same topic. Second test could read
+	// TODO: Potential problem, both DLQ test cases share the same topic. Second test could read
 	// first test's message. Fix: use StartOffset: kafka.LastOffset with unique GroupID per test.
 	t.Run("DLQ Reservation Worker, json.Unmarhsal fails, Wrong type", func(t *testing.T) {
+
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
 		/*
 			Invalid JSON syntax — {broken json
 			Wrong type — field expects bool but gets "hello"
@@ -217,10 +251,22 @@ func TestHandleFailurePipeline(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []byte(`{"ticketUUID":"123","phoneUUID":"456","userUUID":"789","promoted":"notabool"}`), dlqMsg.Value)
 
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 	})
 
 	t.Run("DLQ reservation worker, Redis service is down", func(t *testing.T) {
-		err := redisC.Stop(ctx, nil)
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+		err = redisC.Stop(ctx, nil)
 		require.NoError(t, err)
 
 		defer func() {
@@ -271,5 +317,11 @@ func TestHandleFailurePipeline(t *testing.T) {
 		dlqMsg, err := dlqReader.ReadMessage(ctx)
 		require.NoError(t, err)
 		require.Equal(t, eventBytes, dlqMsg.Value)
+
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 	})
 }

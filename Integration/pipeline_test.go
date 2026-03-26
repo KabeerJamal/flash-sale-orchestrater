@@ -58,6 +58,18 @@ func TestIntegrationPipeline(t *testing.T) {
 	}()
 	defer db.Close()
 
+	//TODO: if you change anything here, you have to change it in 3 different places. Bad practice.
+	luaScript := redis.NewScript(`
+    local keys = redis.call('KEYS', '*')
+    for _, key in ipairs(keys) do
+        if key ~= ARGV[1] then
+            redis.call('DEL', key)
+        end
+    end
+    redis.call('SET', ARGV[1], ARGV[2])
+    return 1
+	`)
+
 	startWorkers(t, ctx)
 
 	waitForApi(t)
@@ -126,6 +138,12 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 			return dbPhoneUUID == phoneUUID && dbUserUUID == userUUID && dbStatus == "RESERVED"
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
+
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 
 	})
 
@@ -228,6 +246,12 @@ func TestIntegrationPipeline(t *testing.T) {
 			}
 			return dbPhoneUUID == phoneUUID && dbUserUUID == userUUID && dbStatus == "PAID"
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be PAID")
+
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 	})
 
 	t.Run("Unsuccessful payment flow", func(t *testing.T) {
@@ -335,6 +359,12 @@ func TestIntegrationPipeline(t *testing.T) {
 			return false
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
 
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
+
 	})
 
 	t.Run("Unsuccessful payment flow(Expired timer)", func(t *testing.T) {
@@ -412,6 +442,12 @@ func TestIntegrationPipeline(t *testing.T) {
 			return false
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be deleted")
 
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
+
 	})
 
 	//2 more test cases left
@@ -445,6 +481,12 @@ func TestIntegrationPipeline(t *testing.T) {
 
 		val, err := rdb.Get(ctx, shared.Reservations).Result()
 		require.Equal(t, "0", val)
+
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 
 	})
 
@@ -575,6 +617,11 @@ func TestIntegrationPipeline(t *testing.T) {
 			return dbPhoneUUID == phoneUUID2 && dbUserUUID == userUUID2 && dbStatus == "RESERVED"
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB status to be RESERVED")
 
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 	})
 
 	t.Run("Product Sold out", func(t *testing.T) {
@@ -680,11 +727,27 @@ func TestIntegrationPipeline(t *testing.T) {
 
 		}, 15*time.Second, 500*time.Millisecond, "Expected status to become SOLD_OUT within 15 seconds")
 
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
+
 	})
 
 	t.Run("Duplicate Buy Now requests", func(t *testing.T) {
-		userUUID := uuid.New().String()
-		phoneUUID := uuid.New().String()
+
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+
+		userUUID := users[rand.Intn(len(users))].UserUUID
+		phoneUUID := phones[0].PhoneUUID
 		body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
 
 		resp, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body)))
@@ -707,6 +770,12 @@ func TestIntegrationPipeline(t *testing.T) {
 		require.NoError(t, err)
 		defer resp2.Body.Close()
 		require.Equal(t, http.StatusConflict, resp2.StatusCode)
+
+		t.Cleanup(func() {
+			_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
+			db.Exec("DELETE FROM RESERVATIONS")
+			db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
+		})
 
 	})
 
