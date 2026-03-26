@@ -113,7 +113,13 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 				continue
 			}
 
-			fmt.Print("Things work fine")
+			err = shared.RetryExternal(5, func() error {
+				return rdb.Set(ctx, data.TicketUUID, shared.SuccessfulReservation, 0).Err()
+			})
+			if err != nil {
+				slog.Error("failed to set redis key", "ticketID", data.TicketUUID, "error", err)
+				continue
+			}
 		}
 	}()
 

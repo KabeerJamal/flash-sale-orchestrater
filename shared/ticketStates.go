@@ -2,6 +2,7 @@ package shared
 
 const (
 	Pending               = "PENDING"
+	Inserting             = "INSERTING"
 	SuccessfulReservation = "SUCCESSFUL_RESERVATION"
 	WaitingList           = "WAITING_LIST"
 	Failed                = "FAILED"
