@@ -81,7 +81,8 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			if err != nil {
 				slog.Error("Error while reading message", "error", err)
-				return
+				time.Sleep(3 * time.Second)
+				continue
 			}
 
 			var data shared.ReservationEvent

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"myproject/shared"
 	"os"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
@@ -80,13 +81,15 @@ func ReservationWorker(ctx context.Context) error {
 		msg, err := r.FetchMessage(ctx) //this is blocking
 
 		//DLQ is for messages that can't be processed. If Kafka is down, you have no message, you just wait/retry until Kafka comes back.
+		//If Kafka is down you have no message to send to DLQ, you just wait for Kafka to come back. DLQ is only for messages you received but couldn't process.
 		if err != nil {
 			slog.Error("Error while reading message", "error", err)
-			return err
+			time.Sleep(3 * time.Second)
+			continue
 		}
 
 		// print message..
-		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
+		//slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
 		var data shared.ReservationEvent
 
