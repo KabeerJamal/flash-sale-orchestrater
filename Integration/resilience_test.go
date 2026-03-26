@@ -117,17 +117,18 @@ func TestHandleFailurePipeline(t *testing.T) {
 			stock, _ := strconv.Atoi(stockStr)
 			return stock == initialStock-1
 		}, 10*time.Second, 500*time.Millisecond)
-		//TODO: You can check DB as well
 		require.Eventually(t, func() bool {
 			var dbPhoneUUID, dbUserUUID, dbStatus string
 			err := db.QueryRow(
+			var count int
+			db.QueryRow("SELECT COUNT(*) FROM RESERVATIONS WHERE ticketID = $1", event.TicketUUID).Scan(&count)
 				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
 				event.TicketUUID,
 			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
 			if err != nil {
 				return false
 			}
-			return dbPhoneUUID == event.PhoneUUID && dbUserUUID == event.UserUUID && dbStatus == "RESERVED"
+			return dbPhoneUUID == event.PhoneUUID && dbUserUUID == event.UserUUID && dbStatus == "RESERVED" && count == 1
 		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
 
 		t.Cleanup(func() {
