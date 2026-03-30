@@ -77,6 +77,21 @@ services:
     command: go run ./Consumers/reservationPersistenceWorker
     deploy:
       replicas: 3
+  soldoutWorker:
+    image: flash-sale-orchestrater-soldoutWorker
+    env_file:
+      ./.env
+    build:
+      context: .
+      dockerfile: DockerFile
+    volumes:
+      - ./Consumers:/app/Consumers     # live hot-reload
+      - ./shared:/app/shared
+      - ./go.mod:/app/go.mod       # Mounts the specific file
+      - ./go.sum:/app/go.sum       # Mounts the specific file   
+    command: go run ./Consumers/reservationPersistenceWorker
+    deploy:
+      replicas: 1
 
   outboxWorker:
     image: flash-sale-orchestrater-outbox
