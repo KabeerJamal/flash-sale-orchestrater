@@ -7,12 +7,14 @@ const (
 	TopicPaymentSuccessful     = "Payment-Successful"
 	TopicPaymentFailure        = "Payment-Failed"
 	TopicDeadLetterQueue       = "Dead-Letter-Queue"
+	TopicFlashSaleEnded        = "Flash-sale-ended"
 
 	TopicReservationGroup           = "Reservation-group"
 	TopicReservationSuccessfulGroup = "InsertionToSQL-group"
 	TopicPaymentGroup               = "Payment-group"
 	TopicPaymentSuccessfulGroup     = "UpdateToSQL-group"
 	TopicPaymentFailureGroup        = "Rollback-group"
+	TopicFlashSaleEndedGroup        = "Flash-sale-ended-group"
 )
 
 /*

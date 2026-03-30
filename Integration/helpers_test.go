@@ -13,6 +13,7 @@ import (
 	reservationPersistenceWorker "myproject/Consumers/reservationPersistenceWorker/worker"
 	reservationWorker "myproject/Consumers/reservationWorker/worker"
 	rollbackWorker "myproject/Consumers/rollbackWorker/worker"
+	soldoutWorker "myproject/Consumers/soldoutWorker/worker"
 	"myproject/api"
 	"myproject/db"
 	"myproject/shared"
@@ -156,6 +157,13 @@ func startWorkers(t *testing.T, ctx context.Context) {
 	}()
 	go func() {
 		err := outboxWorker.OutboxWorker(ctx)
+		if err != nil {
+			t.Logf("Rollback stopped: %v", err)
+		}
+	}()
+
+	go func() {
+		err := soldoutWorker.SoldOutWorker(ctx)
 		if err != nil {
 			t.Logf("Rollback stopped: %v", err)
 		}
@@ -342,6 +350,11 @@ func createKafkaTopics(conn *kafka.Conn) error {
 		},
 		kafka.TopicConfig{
 			Topic:             shared.TopicDeadLetterQueue,
+			NumPartitions:     1,
+			ReplicationFactor: 1,
+		},
+		kafka.TopicConfig{
+			Topic:             shared.TopicFlashSaleEnded,
 			NumPartitions:     1,
 			ReplicationFactor: 1,
 		},
