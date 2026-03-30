@@ -105,19 +105,21 @@ func ReservationWorker(ctx context.Context) error {
 
 		//[Idempotency][AllOrNothing]
 		var res interface{}
-		err = shared.RetryExternal(5, func() error {
-			res, err = script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID, "outbox:" + ticketUUID},
-				shared.Inserting, shared.TopicReservationSuccessful,
-				string(msg.Key),
-				string(msg.Value)).Result()
-			return err
-		})
-		if err != nil {
-			slog.Error("Some problem with redis database", "error", err)
-			//[DLQ][MANUAL COMMITS]
-			shared.SendToDLQ(ctx, dlqWriter, r, msg)
-			continue // outer message loop
+		for {
+			err = shared.RetryExternal(5, func() error {
+				res, err = script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID, "outbox:" + ticketUUID},
+					shared.Inserting, shared.TopicReservationSuccessful,
+					string(msg.Key),
+					string(msg.Value)).Result()
+				return err
+			})
 
+			if err == nil {
+				break // Success! Break out of the inner infinite loop and continue processing
+			}
+
+			slog.Error("Failed to run Lua reservation script (Redis likely down). Retrying THIS EXACT message...", "ticketUUID", ticketUUID, "error", err)
+			time.Sleep(2 * time.Second)
 		}
 
 		// Redis returns numbers as int64 through go-redis
@@ -126,7 +128,7 @@ func ReservationWorker(ctx context.Context) error {
 		if !ok {
 			slog.Error("Unexpected return type from Lua script — TODO: send to DLQ", "result", res)
 			shared.SendToDLQ(ctx, dlqWriter, r, msg)
-			continue // TODO: replace with DLQ publish + commit
+			continue // replace with DLQ publish + commit
 		}
 
 		if n == -2 {
@@ -150,17 +152,20 @@ func ReservationWorker(ctx context.Context) error {
 			memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
 			// rdb.RPush(ctx, "waitlist_queue", memberData)
 
-			err = shared.RetryExternal(5, func() error {
-				_, err = waitlistScript.Run(ctx, rdb, []string{ticketUUID, "waitlist_queue"},
-					shared.WaitingList, memberData).Result()
-				return err
-			})
-			if err != nil {
-				slog.Error("Waitlist script failed after 5 retries", "error", err)
-				//[DLQ][MANUAL COMMITS]
-				shared.SendToDLQ(ctx, dlqWriter, r, msg)
-				continue
+			// Inner infinite loop for the Waitlist
+			for {
+				err = shared.RetryExternal(5, func() error {
+					_, err = waitlistScript.Run(ctx, rdb, []string{ticketUUID, "waitlist_queue"},
+						shared.WaitingList, memberData).Result()
+					return err
+				})
+				if err == nil {
+					break // Success! Break out of the inner loop
+				}
+				slog.Error("Waitlist script failed (Redis likely down). Retrying THIS EXACT message...", "ticketUUID", ticketUUID, "error", err)
+				time.Sleep(2 * time.Second)
 			}
+
 			//[MANUAL COMMITS]
 			r.CommitMessages(ctx, msg)
 		} else if n == -3 { //[Idempotency]

@@ -113,24 +113,41 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			//fmt.Printf("Received message in insertion Worker: key=%s value=%s\n", string(msg.Key), string(msg.Value))
 
 			//on conflict do nothing is basiaclly idempotency check
+			for {
 			err = shared.RetryExternal(5, func() error {
 			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data.TicketUUID, data.PhoneUUID, data.UserUUID, "RESERVED")
 				return err
 			})
-			if err != nil {
-				slog.Error("failed to insert reservation", "ticketID", data.TicketUUID, "error", err)
-				shared.SendToDLQ(ctx, dlqWriter, r, msg)
-				continue
+
+				if err == nil {
+					break // Success! Exit the infinite database block.
+				}
+
+				// DB is down. Sleep, DONT continue, just loop and try this exact message again!
+				slog.Error("failed to insert reservation, retrying", "ticketID", data.TicketUUID, "error", err)
+				time.Sleep(2 * time.Second)
 			}
 
+			for {
 			err = shared.RetryExternal(5, func() error {
 				return rdb.Set(ctx, data.TicketUUID, shared.SuccessfulReservation, 0).Err()
 			})
-			if err != nil {
-				slog.Error("failed to set redis key", "ticketID", data.TicketUUID, "error", err)
-				shared.SendToDLQ(ctx, dlqWriter, r, msg)
-				continue
+
+				if err == nil {
+					break // Success! Exit the infinite redis block.
+				}
+
+				// Redis is down. Sleep, DONT continue, just loop and try this exact message again!
+				slog.Error("failed to set redis key, retrying", "ticketID", data.TicketUUID, "error", err)
+				time.Sleep(2 * time.Second)
 			}
+			// Because the loops above block forever until they succeed, by the time the
+			// code reaches here, YOU ARE GUARANTEED that both DB and Redis succeeded.
+			// You can now safely run r.CommitMessages(ctx, msg) at the end of your outer loop.
+			//If a crash happens mid-way (for example, the database insert worked, but your server caught on fire before the Redis set finished),
+			//  your Go worker completely shuts down without ever reaching the r.CommitMessages() line.
+			//When the container restarts, it connects to Kafka. Kafka says, "You never finished reading your last bookmark,"
+			// and it gives you the exact same message again safely.
 			r.CommitMessages(ctx, msg)
 
 		}
