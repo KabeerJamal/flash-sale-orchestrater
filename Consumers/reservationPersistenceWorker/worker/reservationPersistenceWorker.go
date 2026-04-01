@@ -9,7 +9,6 @@ import (
 	"myproject/shared"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -114,10 +113,10 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			//on conflict do nothing is basiaclly idempotency check
 			for {
-			err = shared.RetryExternal(5, func() error {
-			_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data.TicketUUID, data.PhoneUUID, data.UserUUID, "RESERVED")
-				return err
-			})
+				err = shared.RetryExternal(5, func() error {
+					_, err = db.Exec("INSERT INTO RESERVATIONS (ticketID,phoneUUID, userUUID, status) VALUES ($1, $2, $3, $4) ON CONFLICT (ticketID) DO NOTHING", data.TicketUUID, data.PhoneUUID, data.UserUUID, "RESERVED")
+					return err
+				})
 
 				if err == nil {
 					break // Success! Exit the infinite database block.
@@ -129,9 +128,9 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 			}
 
 			for {
-			err = shared.RetryExternal(5, func() error {
-				return rdb.Set(ctx, data.TicketUUID, shared.SuccessfulReservation, 0).Err()
-			})
+				err = shared.RetryExternal(5, func() error {
+					return rdb.Set(ctx, data.TicketUUID, shared.SuccessfulReservation, 0).Err()
+				})
 
 				if err == nil {
 					break // Success! Exit the infinite redis block.
@@ -155,55 +154,164 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 	go func() {
 		for {
-			msg, err := updateReservationReader.ReadMessage(ctx)
+			msg, err := updateReservationReader.FetchMessage(ctx)
 
 			if err != nil {
 				slog.Error("Error while reading message", "error", err)
-				return
+				time.Sleep(3 * time.Second)
+				continue
 			}
-			slog.Info("Received message in reservation persistence Worker", "key", string(msg.Key), "value", string(msg.Value))
+			//slog.Info("Received message in reservation persistence Worker", "key", string(msg.Key), "value", string(msg.Value))
 
 			var event shared.PaymentEvent
-			json.Unmarshal(msg.Value, &event)
+			err = json.Unmarshal(msg.Value, &event)
+			if err != nil {
+				slog.Error("Error unmarshaling JSON", "error", err)
+				shared.SendToDLQ(ctx, dlqWriter, r, msg)
+				//Dont put return cause then one bad message takes down the whole system
+				continue //Send to DLQ + commit. What would retrying a malformed JSON message accomplish?
+			}
 
-			// --- Retry Logic for Race Condition ---
-			maxRetries := 5
-			success := false
-
-			for i := 1; i <= maxRetries; i++ {
-				// 1. Attempt the update
-				res, err := db.Exec("UPDATE RESERVATIONS SET status = $1 WHERE ticketID = $2 AND status != 'PAID'", "PAID", event.TicketUUID)
-
+			for {
+				tx, err := db.BeginTx(ctx, nil)
 				if err != nil {
-					slog.Error("DB query error", "attempt", i, "error", err)
-				} else {
-					// 2. Check if the row actually existed
-					rowsAffected, err := res.RowsAffected()
-					if err == nil && rowsAffected > 0 {
-						slog.Info("Success! Ticket updated to PAID", "ticketID", event.TicketUUID, "attempt", i)
-						success = true
+					// handle
+					time.Sleep(2 * time.Second)
+					continue
+				}
+
+				res, err := tx.Exec("UPDATE RESERVATIONS SET status = $1 WHERE ticketID = $2 AND status != 'PAID'", "PAID", event.TicketUUID)
+				if err != nil {
+					tx.Rollback()
+					time.Sleep(2 * time.Second)
+					continue
+				}
+
+				rowsAffected, err := res.RowsAffected()
+				if err != nil {
+					tx.Rollback()
+					time.Sleep(2 * time.Second)
+					continue
+				}
+
+				var totalPaid int64
+				if rowsAffected > 0 {
+
+					err = tx.QueryRow("UPDATE CONFIG SET value = value + 1 WHERE key = 'total_paid' RETURNING value").Scan(&totalPaid)
+					if err != nil {
+						tx.Rollback()
+						time.Sleep(2 * time.Second)
+						continue
+					}
+					if err = tx.Commit(); err != nil {
+						tx.Rollback()
+						time.Sleep(2 * time.Second)
+						continue
+					}
+					slog.Info("Success! Ticket updated to PAID", "ticketID", event.TicketUUID)
+
+					for {
 						err = rdb.Set(ctx, event.TicketUUID, shared.Paid, 0).Err()
-						if err != nil {
-							slog.Error("failed to set redis key", "ticketID", event.TicketUUID, "error", err)
-							return
+						if err == nil {
+							break
+						}
+						// DB is down, just sleep and loop back instantly!
+						slog.Error("Redis down, retrying...", "ticketID", event.TicketUUID, "error", err)
+						time.Sleep(2 * time.Second)
+					}
+
+					for {
+						_, err = rdb.Set(ctx, shared.TotalPaid, totalPaid, 0).Result()
+
+						if err == nil {
+							break
+						}
+						// DB is down, just sleep and loop back instantly!
+						slog.Error("Redis down, retrying...", "error", err)
+						time.Sleep(2 * time.Second)
+					}
+
+					if strconv.FormatInt(totalPaid, 10) == os.Getenv("TOTAL_PRODUCTS") {
+
+						eventBytes := []byte(`{"event": "flash_sale_ended"}`)
+
+						for {
+							err := flashSaleEndedWriter.WriteMessages(ctx, kafka.Message{
+								Key:   []byte("sold-out-trigger"),
+								Value: eventBytes,
+							})
+
+							if err == nil {
+								break // Success! The trigger was safely sent to Kafka.
+							}
+
+							// Kafka is currently unreachable. Don't move on!
+							slog.Error("Failed to publish Flash Sale Ended trigger, retrying...", "error", err)
+							time.Sleep(2 * time.Second)
+						}
+					}
+					updateReservationReader.CommitMessages(ctx, msg)
+
+				} else {
+					if err = tx.Commit(); err != nil {
+						tx.Rollback()
+						time.Sleep(2 * time.Second) // Add missing sleep
+						continue
+
+					}
+					// We MUST NOT increment total_paid again. We just read its current value.
+					var totalPaid int64
+					for {
+						err = db.QueryRow("SELECT value FROM CONFIG WHERE key = 'total_paid'").Scan(&totalPaid)
+
+						if err == nil {
+							break // Success!
 						}
 
-						totalPaid, err := rdb.Incr(ctx, shared.TotalPaid).Result()
+						// DB is down, block infinitely right here without restarting the outer transaction!
+						slog.Error("Failed to read total_paid during crash recovery, retrying THIS EXACT query...", "error", err)
+						time.Sleep(2 * time.Second)
+					}
 
-						if err != nil {
-							slog.Error("failed to increment total_paid", "error", err)
-							return
+					//  Force-sync Redis status to PAID (Idempotent, safe to repeat)
+					for {
+						err = rdb.Set(ctx, event.TicketUUID, shared.Paid, 0).Err()
+						if err == nil {
+							break
 						}
+						time.Sleep(2 * time.Second)
+					}
 
-						if strconv.FormatInt(totalPaid, 10) == os.Getenv("TOTAL_PRODUCTS") {
-					eventBytes := []byte(`{"event": "flash_sale_ended"}`)
+					//  Force-sync Redis total_paid counter (Idempotent, because Set overwrites!)
+					for {
+						_, err = rdb.Set(ctx, shared.TotalPaid, totalPaid, 0).Result()
+						if err == nil {
+							break
+						}
+						time.Sleep(2 * time.Second)
+					}
+					//  Run the Sold-Out trigger check again just in case it crashed before sending!
+					if strconv.FormatInt(totalPaid, 10) == os.Getenv("TOTAL_PRODUCTS") {
+						eventBytes := []byte(`{"event": "flash_sale_ended"}`)
+						for {
+							err := flashSaleEndedWriter.WriteMessages(ctx, kafka.Message{
+								Key:   []byte("sold-out-trigger"),
+								Value: eventBytes,
+							})
+							if err == nil {
+								break
+							}
+							time.Sleep(2 * time.Second)
+						}
+					}
+					updateReservationReader.CommitMessages(ctx, msg)
 
-					flashSaleEndedWriter.WriteMessages(ctx, kafka.Message{
-						Key:   []byte("sold-out-trigger"),
-						Value: eventBytes,
-					})
+					slog.Info("Successfully recovered from previous crash!", "ticketID", event.TicketUUID)
 
 				}
+				break
+			}
+
 		}
 	}()
 
