@@ -78,12 +78,12 @@ services:
     deploy:
       replicas: 3
   soldoutWorker:
-    image: flash-sale-orchestrater-soldoutWorker
+    image: flash-sale-orchestrater-soldoutworker
     env_file:
       ./.env
     build:
       context: .
-      dockerfile: DockerFile
+      dockerfile: Dockerfile
     volumes:
       - ./Consumers:/app/Consumers     # live hot-reload
       - ./shared:/app/shared
@@ -172,6 +172,32 @@ services:
   #   image: flash-sale-orchestrater-consumerd  
   #   command: /app/bin/d 
   #   deploy: {replicas: 3}
-  
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.enable-remote-write-receiver' # Crucial for K6 pushing metrics
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - '3000:3000'
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+volumes:
+  grafana_data:
+
+
 networks:
   default:
