@@ -1,15 +1,18 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics'
+import { Trend } from 'k6/metrics';
+const vuDuration = new Trend('vu_duration');
 
 export const options = {
-  vus: 500,
-  iterations: 500,
+  vus: 50,
+  iterations: 50,
 };
 
 export function setup() {
   const users = http.get('http://localhost:8080/users').json();
   const phones = http.get('http://localhost:8080/phones').json();
+  //shorthand for { users: users, phones: phones }
   return { users, phones };
 }
 
@@ -23,6 +26,7 @@ const waitingList = new Counter('WaitingList');
  *  
  */
 export default function (data) {
+   const start = Date.now();
   const user = data.users[Math.floor(Math.random() * data.users.length)];
   const phone = data.phones[0];
 
@@ -56,9 +60,10 @@ export default function (data) {
       break;
     }
 
-    sleep(1); // Wait 1 second before checking again
+    sleep(0.1); // Wait 1 second before checking again
   }
-  sleep(10)
+  vuDuration.add(Date.now() - start); 
+  //sleep(10)
 
 }
 
