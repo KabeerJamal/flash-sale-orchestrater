@@ -44,6 +44,7 @@ func RollbackWorker(ctx context.Context) error {
 		Topic:   shared.TopicPaymentFailure,
 		GroupID: shared.TopicPaymentFailureGroup,
 	})
+	defer r.Close()
 
 	w := kafka.NewWriter(kafka.WriterConfig{
 		Brokers: []string{kafkaBrokerAddress},
@@ -51,134 +52,183 @@ func RollbackWorker(ctx context.Context) error {
 		//Balancer: &kafka.LeastBytes{},
 		Balancer: &kafka.Hash{},
 	})
+	defer w.Close()
+
+	dlqWriter := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  []string{kafkaBrokerAddress},
+		Balancer: &kafka.Hash{},
+		Topic:    shared.TopicDeadLetterQueue,
+	})
+	defer dlqWriter.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	script := redis.NewScript(
+		`local customer = redis.call('LPOP', KEYS[1])
+		-- Mark the original (current) user's ticket as failed atomically!
+		redis.call('SET', KEYS[3], 'FAILED') 
+
+		if customer then
+			redis.call('SET', 'pending_promo:' .. KEYS[3], customer) 
+			return customer
+		else
+			redis.call('INCR', KEYS[2]) 
+			return nil
+		end`)
+
 	// Consume forever
 	for {
-		msg, err := r.ReadMessage(ctx) //this is blocking
+		msg, err := r.FetchMessage(ctx) //this is blocking
 		if err != nil {
 			slog.Error("Error while reading message", "error", err)
-			return err
+			time.Sleep(3 * time.Second)
+			continue
 		}
 
 		// Print message
-		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
+		//slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
 		// Unmarshal the message
 		var pm shared.PaymentEvent
 		err = json.Unmarshal(msg.Value, &pm)
 		if err != nil {
-			slog.Error("Error unmarshaling message", "error", err)
-			continue
+			slog.Error("Error unmarshaling JSON", "error", err)
+			shared.SendToDLQ(ctx, dlqWriter, r, msg)
+			//Dont put return cause then one bad message takes down the whole system
+			continue //Send to DLQ + commit. What would retrying a malformed JSON message accomplish?
 		}
 
-		// Retry Logic for Race Condition
-		maxRetries := 5
-		success := false
-
-		for i := 1; i <= maxRetries; i++ {
-			// Attempt to delete the reservation
+		for {
 			res, err := db.Exec("DELETE FROM RESERVATIONS WHERE ticketID = $1", pm.TicketUUID)
-
 			if err != nil {
-				slog.Error("DB query error",
-					"attempt", i,
-					"ticketUUID", pm.TicketUUID,
-					"error", err,
-				)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			rowsAffected, err := res.RowsAffected()
+			if err != nil {
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			if rowsAffected > 0 {
+				customerStr := executeLuaPromoScript(ctx, rdb, script, pm.TicketUUID)
+				if customerStr != "" {
+					err = processPromotedCustomer(ctx, rdb, w, pm.TicketUUID, customerStr)
+					if err != nil {
+						shared.SendToDLQ(ctx, dlqWriter, r, msg)
+						break
+					}
+				}
 			} else {
-				// Check if a row was actually deleted
-				rowsAffected, _ := res.RowsAffected()
-
-				if rowsAffected > 0 {
-					//get user form waitlist. set ticket UUID status to RESERVATION_SUCCESSFUL
-					script := redis.NewScript(`
-							local customer = redis.call('LPOP', KEYS[1])
-
-							if customer then
-
-								local parts = {}
-								for part in string.gmatch(customer, '[^|]+') do
-									table.insert(parts, part)
-								end
-								local ticketUUID = parts[1]
-								redis.call('SET', ticketUUID, KEYS[2])
-								return customer
-							else
-								redis.call('INCR', KEYS[3])
-								return nil
-								end
-						`)
-					//dont call kafka if no one in waitlist
-					//return customer so then i can split it
-
-					result, err := script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.SuccessfulReservation, shared.Reservations}).Result()
-					if err != nil && err != redis.Nil {
-						slog.Error("Some problem with redis database", "error", err)
-						return err
+				// Crash Recovery Path
+				var currentStatus string
+				for {
+					currentStatus, err = rdb.Get(ctx, pm.TicketUUID).Result()
+					if err == nil || err == redis.Nil {
+						break
 					}
-
-					if result != nil {
-						parts := strings.Split(result.(string), "|")
-						if len(parts) != 3 {
-							slog.Error("malformed waitlist entry", "entry", result)
-						}
-						nextTicketUUID := parts[0]
-						nextUserUUID := parts[1]
-						nextPhoneUUID := parts[2]
-
-						var payload shared.ReservationEvent
-						payload.TicketUUID = nextTicketUUID
-						payload.UserUUID = nextUserUUID
-						payload.PhoneUUID = nextPhoneUUID
-						payload.Promoted = true
-						b, _ := json.Marshal(payload)
-						err = w.WriteMessages(
-							ctx,
-
-							kafka.Message{
-								Key:   []byte(nextTicketUUID), //convert in bytes
-								Value: b,                      //convert in bytes
-							},
-						)
-
+					time.Sleep(2 * time.Second)
+				}
+				if currentStatus != "FAILED" {
+					// SCENARIO 1: Lua never ran
+					customerStr := executeLuaPromoScript(ctx, rdb, script, pm.TicketUUID)
+					if customerStr != "" {
+						err = processPromotedCustomer(ctx, rdb, w, pm.TicketUUID, customerStr)
 						if err != nil {
-							slog.Error("failed to write message", "error", err)
+							shared.SendToDLQ(ctx, dlqWriter, r, msg)
+							break
 						}
 					}
-					success = true
-					break // It worked, break out of the retry loop
-
+				} else {
+					// SCENARIO 2 & 3: Lua ran, check outbox!
+					var outboxCustomer string
+					for {
+						outboxCustomer, err = rdb.Get(ctx, "pending_promo:"+pm.TicketUUID).Result()
+						if err == nil || err == redis.Nil {
+							break
+						}
+						time.Sleep(2 * time.Second)
+					}
+					if outboxCustomer != "" {
+						// SCENARIO 2: Outbox exists, just resend to Kafka!
+						err = processPromotedCustomer(ctx, rdb, w, pm.TicketUUID, outboxCustomer)
+						if err != nil {
+							shared.SendToDLQ(ctx, dlqWriter, r, msg)
+							break
+						}
+					}
 				}
 
 			}
-
-			slog.Warn("Ticket not found, waiting for insertion or already deleted",
-				"attempt", i,
-				"ticketUUID", pm.TicketUUID,
-			)
-
-			// Sleep before trying again
-			if i < maxRetries {
-				time.Sleep(500 * time.Millisecond)
-			}
+			break
 		}
+		r.CommitMessages(ctx, msg)
 
-		if !success {
-			slog.Warn("Finished retries; row was likely already deleted or never inserted",
-				"ticketUUID", pm.TicketUUID,
-			)
+	}
+}
+
+// 1. Helper to run the Lua script infinitely
+func executeLuaPromoScript(ctx context.Context, rdb *redis.Client, script *redis.Script, failedTicketUUID string) string {
+	var result interface{}
+	var err error
+	for {
+		result, err = script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.Reservations, failedTicketUUID}).Result()
+		if err == nil || err == redis.Nil {
+			break
 		}
-		// Update the final status in Redis so the frontend knows it failed
-		err = rdb.Set(ctx, pm.TicketUUID, shared.Failed, 0).Err()
-		if err != nil {
-			slog.Error("Error updating Redis status",
-				"ticketUUID", pm.TicketUUID,
-				"error", err,
-			)
+		slog.Error("Redis Lua script failed, retrying...", "error", err)
+		time.Sleep(2 * time.Second)
+	}
+
+	if result != nil {
+		return result.(string)
+	}
+	return ""
+}
+
+// 2. Helper to write to Kafka and delete the outbox infinitely
+func processPromotedCustomer(ctx context.Context, rdb *redis.Client, w *kafka.Writer, failedTicketUUID string, customerData string) error {
+	parts := strings.Split(customerData, "|")
+	if len(parts) != 3 {
+		slog.Error("malformed waitlist entry", "entry", customerData)
+		return fmt.Errorf("malformed waitlist entry: %s", customerData)
+	}
+
+	payload := shared.ReservationEvent{
+		TicketUUID: parts[0],
+		UserUUID:   parts[1],
+		PhoneUUID:  parts[2],
+		Promoted:   true,
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal payload", "error", err)
+		return err // ← Return error
+	}
+
+	// Infinite loop for Kafka
+	for {
+		err := w.WriteMessages(ctx, kafka.Message{
+			Key:   []byte(payload.TicketUUID),
+			Value: b,
+		})
+		if err == nil {
+			break
 		}
+		slog.Error("Failed to write Kafka promotion, retrying...", "error", err)
+		time.Sleep(2 * time.Second)
+	}
+
+	// Infinite loop to clean the outbox
+	for {
+		err := rdb.Del(ctx, "pending_promo:"+failedTicketUUID).Err()
+		if err == nil {
+			break
+		}
+		slog.Error("Failed to delete pending user outbox, retrying...", "error", err)
+		time.Sleep(2 * time.Second)
 	}
 	return nil
 }
