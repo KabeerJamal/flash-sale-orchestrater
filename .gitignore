@@ -3,6 +3,7 @@ env
 /data
 /redis_data
 /redpanda_data
+/prometheus_data
 
 *.exe
 *.dll
@@ -13,3 +14,4 @@ env
 
 /frontend/node_modules
 ./vscode
+
