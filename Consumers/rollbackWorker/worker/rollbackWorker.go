@@ -70,7 +70,7 @@ func RollbackWorker(ctx context.Context) error {
 		redis.call('SET', KEYS[3], 'FAILED') 
 
 		if customer then
-			redis.call('SET', 'pending_promo:' .. KEYS[3], customer) 
+			redis.call('SET', ARGV[1] .. KEYS[3], customer) 
 			return customer
 		else
 			redis.call('INCR', KEYS[2]) 
@@ -174,7 +174,7 @@ func executeLuaPromoScript(ctx context.Context, rdb *redis.Client, script *redis
 	var result interface{}
 	var err error
 	for {
-		result, err = script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.Reservations, failedTicketUUID}).Result()
+		result, err = script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.Reservations, failedTicketUUID}, shared.PromotionPending).Result()
 		if err == nil || err == redis.Nil {
 			break
 		}
