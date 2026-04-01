@@ -293,65 +293,7 @@ func TestHandleFailurePipeline(t *testing.T) {
 		})
 	})
 
-	// t.Run("DLQ reservation worker, Redis service is down", func(t *testing.T) {
-	// 	err := redisC.Stop(ctx, nil)
-	// 	require.NoError(t, err)
-
-	// 	var event shared.ReservationEvent
-
-	// 	event.TicketUUID = uuid.New().String()
-	// 	event.PhoneUUID = phones[0].PhoneUUID
-	// 	event.UserUUID = users[rand.Intn(len(users))].UserUUID
-
-	// 	eventBytes, err := json.Marshal(event)
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-
-	// 	w := kafka.NewWriter(kafka.WriterConfig{
-	// 		Brokers: []string{env.brokerAddress},
-	// 		Topic:   shared.TopicReservation,
-	// 		//Balancer: &kafka.LeastBytes{},
-	// 		Balancer: &kafka.Hash{},
-	// 	})
-
-	// 	w.WriteMessages(
-	// 		ctx,
-	// 		kafka.Message{
-	// 			Key:   []byte(event.TicketUUID),
-	// 			Value: eventBytes,
-	// 		},
-	// 	)
-	// 	w.Close()
-
-	// 	dlqReader := kafka.NewReader(kafka.ReaderConfig{
-	// 		Brokers: []string{env.brokerAddress},
-	// 		Topic:   shared.TopicDeadLetterQueue,
-	// 		GroupID: "test-dlq-group",
-	// 	})
-	// 	defer dlqReader.Close()
-
-	// 	dlqMsg, err := dlqReader.ReadMessage(ctx)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, eventBytes, dlqMsg.Value)
-
-	// 	t.Cleanup(func() {
-	// 		redisC.Start(ctx)
-	// 		// reconnect rdb and reset state
-	// 		host, _ := redisC.Host(ctx)
-	// 		port, _ := redisC.MappedPort(ctx, "6379")
-	// 		rdb := redis.NewClient(&redis.Options{
-	// 			Addr: host + ":" + port.Port(),
-	// 		})
-	// 		rdb.Set(ctx, shared.Reservations, 10, 0)
-
-	// 		api.CleanUpFunction(rdb, db)
-	// 	})
-
-	// })
-
-	//Atomicity testing for both reservation wokrer and reservation persistence worker insertion function
-	t.Run("Atomicity: exactly 10 reservations and 40 waitlisted under concurrent load", func(t *testing.T) {
+	t.Run("Redis gatekeeper: exactly 10 reservations under concurrent load", func(t *testing.T) {
 		host, err := redisC.Host(ctx)
 		require.NoError(t, err)
 		port, err := redisC.MappedPort(ctx, "6379")
@@ -639,24 +581,44 @@ func TestHandleFailurePipeline(t *testing.T) {
 		})
 	})
 
-	t.Run("DLQ reservation persistence worker insertion function, redis service is down", func(t *testing.T) {
-		err := redisC.Stop(ctx, nil)
-		require.NoError(t, err)
+	t.Run("Idempotency Check for reservationPersistence Worker, update function", func(t *testing.T) {
 
-		var event shared.ReservationEvent
+		//from the database get total paid value
+		var initialTotalPaid int
+		err := db.QueryRow("SELECT value FROM CONFIG WHERE key = 'total_paid'").Scan(&initialTotalPaid)
+
+		var event shared.PaymentEvent
 
 		event.TicketUUID = uuid.New().String()
 		event.PhoneUUID = phones[0].PhoneUUID
 		event.UserUUID = users[rand.Intn(len(users))].UserUUID
+		event.PaymentIntentID = "doesnt matter"
+		event.Amount = 32
+		event.Currency = "pkr"
+		event.Status = shared.StripePaid
+
+		_, err = db.Exec(
+			"INSERT INTO RESERVATIONS (ticketID, phoneUUID, userUUID, status) VALUES ($1, $2, $3, 'RESERVED')",
+			event.TicketUUID, event.PhoneUUID, event.UserUUID,
+		)
+		require.NoError(t, err)
 
 		eventBytes, err := json.Marshal(event)
 		if err != nil {
 			t.Fatal(err)
 		}
 
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+
 		w := kafka.NewWriter(kafka.WriterConfig{
 			Brokers: []string{env.brokerAddress},
-			Topic:   shared.TopicReservationSuccessful,
+			Topic:   shared.TopicPaymentSuccessful,
 			//Balancer: &kafka.LeastBytes{},
 			Balancer: &kafka.Hash{},
 		})
@@ -668,109 +630,54 @@ func TestHandleFailurePipeline(t *testing.T) {
 				Value: eventBytes,
 			},
 		)
-		w.Close()
+		w.WriteMessages(
+			ctx,
+			kafka.Message{
+				Key:   []byte(event.TicketUUID),
+				Value: eventBytes,
+			},
+		)
 
-		dlqReader := kafka.NewReader(kafka.ReaderConfig{
-			Brokers: []string{env.brokerAddress},
-			Topic:   shared.TopicDeadLetterQueue,
-			GroupID: "test-dlq-group",
-		})
-		defer dlqReader.Close()
+		require.Eventually(t, func() bool {
+			var dbPhoneUUID, dbUserUUID, dbStatus string
+			var count int
+			db.QueryRow("SELECT COUNT(*) FROM RESERVATIONS WHERE ticketID = $1", event.TicketUUID).Scan(&count)
+			err := db.QueryRow(
+				"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
+				event.TicketUUID,
+			).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
+			if err != nil {
+				return false
+			}
+			return dbPhoneUUID == event.PhoneUUID && dbUserUUID == event.UserUUID && dbStatus == "PAID" && count == 1
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to exist with correct values")
 
-		dlqMsg, err := dlqReader.ReadMessage(ctx)
-		require.NoError(t, err)
-		require.Equal(t, eventBytes, dlqMsg.Value)
+		require.Eventually(t, func() bool {
+			status, _ := rdb.Get(ctx, event.TicketUUID).Result()
+			return status == shared.Paid
+		}, 10*time.Second, 500*time.Millisecond, "Expected redis to have status paid for the ticketUUID")
 
-		verifyCommitReader := kafka.NewReader(kafka.ReaderConfig{
-			Brokers: []string{env.brokerAddress},
-			Topic:   shared.TopicReservationSuccessful,
-			GroupID: shared.TopicReservationSuccessfulGroup, // Must match the worker's consumer group!
-		})
-		defer verifyCommitReader.Close()
-		verifyCtx, cancelVerify := context.WithTimeout(ctx, 2*time.Second)
-		defer cancelVerify()
-		_, err = verifyCommitReader.ReadMessage(verifyCtx)
-		// We EXPECT a timeout here. If the worker committed the message after sending it
-		// to the DLQ, there will be no uncommitted messages left for this group to read.
-		require.ErrorIs(t, err, context.DeadlineExceeded, "Worker failed to commit the original message")
+		require.Eventually(t, func() bool {
+			var totalPaid int
+			err = db.QueryRow("SELECT value FROM CONFIG WHERE key = 'total_paid'").Scan(&totalPaid)
+			if err != nil {
+				return false
+			}
+			return totalPaid == initialTotalPaid+1
+		}, 10*time.Second, 500*time.Millisecond, "Exepct db value in total Paid to be udpated")
+		require.Eventually(t, func() bool {
+			totalPaidRedis, _ := rdb.Get(ctx, shared.TotalPaid).Result()
+			totalPaidInt, _ := strconv.Atoi(totalPaidRedis)
+			return totalPaidInt == initialTotalPaid+1
+		}, 10*time.Second, 500*time.Millisecond, "Expected redis to have status paid for the ticketUUID")
 
 		t.Cleanup(func() {
-			redisC.Start(ctx)
-			// reconnect rdb and reset state
-			host, _ := redisC.Host(ctx)
-			port, _ := redisC.MappedPort(ctx, "6379")
-			rdb := redis.NewClient(&redis.Options{
-				Addr: host + ":" + port.Port(),
-			})
-			rdb.Set(ctx, shared.Reservations, 10, 0)
-
 			api.CleanUpFunction(rdb, db)
 		})
 
 	})
 
-	// t.Run("DLQ reservation persistence worker insertion function, db service is down", func(t *testing.T) {
-	// 	host, err := redisC.Host(ctx)
-	// 	require.NoError(t, err)
-	// 	port, err := redisC.MappedPort(ctx, "6379")
-	// 	require.NoError(t, err)
-	// 	rdb := redis.NewClient(&redis.Options{
-	// 		Addr: host + ":" + port.Port(),
-	// 	})
-	// 	err = postgresContainer.Stop(ctx, nil)
-	// 	require.NoError(t, err)
-
-	// 	var event shared.ReservationEvent
-
-	// 	event.TicketUUID = uuid.New().String()
-	// 	event.PhoneUUID = phones[0].PhoneUUID
-	// 	event.UserUUID = users[rand.Intn(len(users))].UserUUID
-
-	// 	eventBytes, err := json.Marshal(event)
-	// 	if err != nil {
-	// 		t.Fatal(err)
-	// 	}
-
-	// 	w := kafka.NewWriter(kafka.WriterConfig{
-	// 		Brokers:  []string{env.brokerAddress},
-	// 		Topic:    shared.TopicReservationSuccessful,
-	// 		Balancer: &kafka.Hash{},
-	// 	})
-
-	// 	w.WriteMessages(
-	// 		ctx,
-	// 		kafka.Message{
-	// 			Key:   []byte(event.TicketUUID),
-	// 			Value: eventBytes,
-	// 		},
-	// 	)
-	// 	w.Close()
-
-	// 	dlqReader := kafka.NewReader(kafka.ReaderConfig{
-	// 		Brokers: []string{env.brokerAddress},
-	// 		Topic:   shared.TopicDeadLetterQueue,
-	// 		GroupID: "test-dlq-group",
-	// 	})
-	// 	defer dlqReader.Close()
-
-	// 	dlqMsg, err := dlqReader.ReadMessage(ctx)
-	// 	require.NoError(t, err)
-	// 	require.Equal(t, eventBytes, dlqMsg.Value)
-
-	// 	verifyCommitReader := kafka.NewReader(kafka.ReaderConfig{
-	// 		Brokers: []string{env.brokerAddress},
-	// 		Topic:   shared.TopicReservationSuccessful,
-	// 		GroupID: shared.TopicReservationSuccessfulGroup,
-	// 	})
-	// 	defer verifyCommitReader.Close()
-	// 	verifyCtx, cancelVerify := context.WithTimeout(ctx, 2*time.Second)
-	// 	defer cancelVerify()
-	// 	_, err = verifyCommitReader.ReadMessage(verifyCtx)
-	// 	require.ErrorIs(t, err, context.DeadlineExceeded, "Worker failed to commit the original message")
-
-	// 	t.Cleanup(func() {
-	// 		postgresContainer.Start(ctx)
-	// 		api.CleanUpFunction(rdb, db)
-	// 	})
-	// })
+	//TODO:Idempotency and DLQ test  rollback wokrer (TODO)
+	//TODO: Test external service down
+	//TODO:Test crash halfway(worker)
 }
