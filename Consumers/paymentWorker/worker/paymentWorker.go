@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"myproject/shared"
 	"os"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -36,16 +37,23 @@ func PaymentWorker(ctx context.Context) error {
 		GroupID: shared.TopicPaymentGroup,
 	})
 	defer r.Close()
+	dlqWriter := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  []string{kafkaBrokerAddress},
+		Balancer: &kafka.Hash{},
+		Topic:    shared.TopicDeadLetterQueue,
+	})
+	defer dlqWriter.Close()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	for {
-		msg, err := r.ReadMessage(ctx)
+		msg, err := r.FetchMessage(ctx)
 
 		if err != nil {
-			slog.Error("Error while reading Kafka message", "error", err)
-			return err
+			slog.Error("Error while reading message", "error", err)
+			time.Sleep(3 * time.Second)
+			continue
 		}
 
 		// 3. Print message
@@ -63,6 +71,7 @@ func PaymentWorker(ctx context.Context) error {
 				"error", err,
 				"raw_message", string(msg.Value),
 			)
+			shared.SendToDLQ(ctx, dlqWriter, r, msg) // ← DLQ + commit
 			continue
 		}
 
@@ -72,30 +81,48 @@ func PaymentWorker(ctx context.Context) error {
 				"error", err,
 				"ticketUUID", paymentMessage.TicketUUID,
 			)
+			shared.SendToDLQ(ctx, dlqWriter, r, msg) // ← DLQ + commit
 			continue
 		}
 
 		if paymentMessage.Status == shared.StripePaid {
 
-			err := w.WriteMessages(
-				ctx,
-				kafka.Message{
-					Key:   msg.Key,
-					Value: valueBytes,
-				},
-			)
-			if err != nil {
-				slog.Error("failed to write payment message", "error", err)
+			for {
+				err := w.WriteMessages(
+					ctx,
+					kafka.Message{
+						Key:   msg.Key,
+						Value: valueBytes,
+					},
+				)
+				if err == nil {
+					break // Success! The trigger was safely sent to Kafka.
+				}
+
+				// Kafka is currently unreachable. Don't move on!
+				slog.Error("Failed to publish Sucessful payment message trigger, retrying...", "error", err)
+				time.Sleep(2 * time.Second)
 			}
+			r.CommitMessages(ctx, msg)
 		} else {
 
-			rollBackWriter.WriteMessages(
-				ctx,
-				kafka.Message{
-					Key:   msg.Key,
-					Value: valueBytes,
-				},
-			)
+			for {
+				err := rollBackWriter.WriteMessages(
+					ctx,
+					kafka.Message{
+						Key:   msg.Key,
+						Value: valueBytes,
+					},
+				)
+				if err == nil {
+					break // Success! The trigger was safely sent to Kafka.
+				}
+
+				// Kafka is currently unreachable. Don't move on!
+				slog.Error("Failed to publish Rollback message trigger, retrying...", "error", err)
+				time.Sleep(2 * time.Second)
+			}
+			r.CommitMessages(ctx, msg)
 		}
 	}
 
