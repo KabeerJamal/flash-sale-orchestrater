@@ -4,6 +4,7 @@ env
 /redis_data
 /redpanda_data
 /prometheus_data
+/grafana_data
 
 *.exe
 *.dll
