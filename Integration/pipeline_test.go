@@ -472,7 +472,7 @@ func TestIntegrationPipeline(t *testing.T) {
 
 	})
 
-	t.Run("Promoted to wait list", func(t *testing.T) {
+	t.Run("Promoted from wait list to Successfull reservation", func(t *testing.T) {
 		/*If final assertions pass it must be the case that redis waiting queue is working fine*/
 		//test redis check
 		host, err := redisC.Host(ctx)
