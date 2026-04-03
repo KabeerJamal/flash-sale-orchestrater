@@ -127,19 +127,19 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 				time.Sleep(2 * time.Second)
 			}
 
-			// for {
-			// 	err = shared.RetryExternal(5, func() error {
-			// 		return rdb.Set(ctx, data.TicketUUID, shared.SuccessfulReservation, 0).Err()
-			// 	})
+			for {
+				err = shared.RetryExternal(5, func() error {
+					return rdb.Set(ctx, data.TicketUUID, shared.SuccessfulReservation, 0).Err()
+				})
 
-			// 	if err == nil {
-			// 		break // Success! Exit the infinite redis block.
-			// 	}
+				if err == nil {
+					break // Success! Exit the infinite redis block.
+				}
 
-			// 	// Redis is down. Sleep, DONT continue, just loop and try this exact message again!
-			// 	slog.Error("failed to set redis key, retrying", "ticketID", data.TicketUUID, "error", err)
-			// 	time.Sleep(2 * time.Second)
-			// }
+				// Redis is down. Sleep, DONT continue, just loop and try this exact message again!
+				slog.Error("failed to set redis key, retrying", "ticketID", data.TicketUUID, "error", err)
+				time.Sleep(2 * time.Second)
+			}
 			// Because the loops above block forever until they succeed, by the time the
 			// code reaches here, YOU ARE GUARANTEED that both DB and Redis succeeded.
 			// You can now safely run r.CommitMessages(ctx, msg) at the end of your outer loop.
