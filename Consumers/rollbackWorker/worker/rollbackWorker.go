@@ -67,7 +67,7 @@ func RollbackWorker(ctx context.Context) error {
 	script := redis.NewScript(
 		`local customer = redis.call('LPOP', KEYS[1])
 		-- Mark the original (current) user's ticket as failed atomically!
-		redis.call('SET', KEYS[3], 'FAILED') 
+		redis.call('SET', KEYS[3], KEYS[4]) 
 
 		if customer then
 			redis.call('SET', ARGV[1] .. KEYS[3], customer) 
@@ -174,7 +174,7 @@ func executeLuaPromoScript(ctx context.Context, rdb *redis.Client, script *redis
 	var result interface{}
 	var err error
 	for {
-		result, err = script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.Reservations, failedTicketUUID}, shared.PromotionPending).Result()
+		result, err = script.Run(ctx, rdb, []string{shared.WaitListQueue, shared.Reservations, failedTicketUUID, shared.Failed}, shared.PromotionPending).Result()
 		if err == nil || err == redis.Nil {
 			break
 		}
