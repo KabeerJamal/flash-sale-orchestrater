@@ -26,7 +26,7 @@ const waitingList = new Counter('WaitingList');
  *  
  */
 export default function (data) {
-   const start = Date.now();
+  const start = Date.now();
   const user = data.users[Math.floor(Math.random() * data.users.length)];
   const phone = data.phones[0];
 
