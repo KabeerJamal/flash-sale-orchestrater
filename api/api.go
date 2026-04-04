@@ -127,6 +127,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 
 	r.POST("/reset", loadTestingTearDown(rdb, db))
 
+	r.POST("/stripeWebhookTest", callStripeWebhook())
+
 	/*r.Run() is an infinite loop. It completely ignores the ctx context.
 	Context you passed in, and it will block your test forever.
 	The return nil below it will literally never execute.*/
