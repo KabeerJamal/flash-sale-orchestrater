@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 )
@@ -87,7 +88,7 @@ func RollbackWorker(ctx context.Context) error {
 		}
 
 		// Print message
-		//slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
+		slog.Info("Received message", "key", string(msg.Key), "value", string(msg.Value))
 
 		// Unmarshal the message
 		var pm shared.PaymentEvent
