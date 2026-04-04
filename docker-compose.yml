@@ -59,7 +59,7 @@ services:
     command:  go run ./Consumers/reservationWorker
     #command: tail -f /dev/null
     deploy:
-      replicas: 3
+      replicas: 1
 
 
   reservationPersistenceWorker:
@@ -76,7 +76,7 @@ services:
       - ./go.sum:/app/go.sum       # Mounts the specific file   
     command: go run ./Consumers/reservationPersistenceWorker
     deploy:
-      replicas: 3
+      replicas: 1
   soldoutWorker:
     image: flash-sale-orchestrater-soldoutworker
     env_file:
@@ -89,7 +89,7 @@ services:
       - ./shared:/app/shared
       - ./go.mod:/app/go.mod       # Mounts the specific file
       - ./go.sum:/app/go.sum       # Mounts the specific file   
-    command: go run ./Consumers/reservationPersistenceWorker
+    command: go run ./Consumers/soldoutWorker
     deploy:
       replicas: 1
 
@@ -107,7 +107,7 @@ services:
       - ./go.sum:/app/go.sum       # Mounts the specific file   
     command: go run ./Consumers/outboxWorker
     deploy:
-      replicas: 3
+      replicas: 1
 
   paymentWorker:
     image: flash-sale-orchestrater-consumerc
@@ -122,7 +122,22 @@ services:
       - ./go.sum:/app/go.sum      
     command: go run ./Consumers/paymentWorker
     deploy:
-      replicas: 3
+      replicas: 1
+  
+  rollbackWorker:
+    image: flash-sale-orchestrater-rollback
+    env_file:
+      - ./.env
+    build:
+      context: .
+      dockerfile: Dockerfile  
+    volumes:
+      - ./Consumers:/app/Consumers
+      - ./go.mod:/app/go.mod     
+      - ./go.sum:/app/go.sum      
+    command: go run ./Consumers/rollbackWorker
+    deploy:
+      replicas: 1
 
   # consumerD:
   #   image: flash-sale-orchestrater-consumerd
