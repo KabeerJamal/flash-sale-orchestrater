@@ -108,7 +108,7 @@ func ReservationWorker(ctx context.Context) error {
 		for {
 			err = shared.RetryExternal(5, func() error {
 				res, err = script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID, "outbox:" + ticketUUID},
-					shared.SuccessfulReservation, shared.TopicReservationSuccessful,
+					shared.Inserting, shared.TopicReservationSuccessful,
 					string(msg.Key),
 					string(msg.Value)).Result()
 				return err
