@@ -1,0 +1,162 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"myproject/shared"
+	"os"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+func reservationCache(ticketUUID string, value []byte) error {
+	//do rdb.get sold out, if its true, do rdb.set ticket uuid to shared.SoldOut and return nil
+
+	redisAddress := os.Getenv("REDIS_local")
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddress,
+		Password: "", // no password set
+		DB:       0,  // use default DB
+	})
+	defer rdb.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	//You send message to two places, frontend(via redis) and backend(using redpanda)
+	// if reservation in redis is less than 10, do reservation in redis 10 - 1. Send message to kafka for new topic
+	//[Idempotency] Previous script was not idempotent
+	script := redis.NewScript(`
+			local stock = tonumber(redis.call("GET", KEYS[1]))
+			if stock == nil then
+				return -2
+			end
+
+			-- [Idempotency] SET NX ensures only first execution sets this
+			if redis.call("EXISTS", KEYS[2]) == 1 then
+    return -3
+end
+			redis.call("SET", KEYS[2], ARGV[1])
+
+			if stock <= 0 then
+				return -1
+			end
+
+			-- [AllOrNothing] Outbox pattern - store Kafka message atomically before publishing
+			redis.call("HSET", KEYS[3], "topic", ARGV[2], "key", ARGV[3], "value", ARGV[4])
+
+			return redis.call("DECR", KEYS[1])
+		`) // script is basically -2,-1 or remaining stock after decrement
+
+	//[AllOrNothing]
+	waitlistScript := redis.NewScript(`
+				redis.call("SET", KEYS[1], ARGV[1])
+				redis.call("RPUSH", KEYS[2], ARGV[2])
+				return 1
+			`)
+
+	// 	soldOutScript := redis.NewScript(`
+	// 	local soldOut = redis.call("GET", KEYS[1])
+
+	// if soldOut == "1" then
+	//     redis.call("SET", KEYS[2], ARGV[1])
+	//     return -1
+	// end
+
+	// return 0
+	// 	`)
+
+	// 	for {
+	// 		response, err := soldOutScript.Run(ctx, rdb, []string{
+	// 			shared.ProductSoldOut,
+	// 			ticketUUID,
+	// 		}, value).Result()
+	// 		if response.(int64) == -1 {
+	// 			return nil
+	// 		}
+	// 		if err == nil {
+	// 			break
+	// 		}
+
+	// 		slog.Error("Failed to run Lua SoldOut script (Redis likely down). Retrying THIS EXACT message...", "ticketUUID", ticketUUID, "error", err)
+	// 		time.Sleep(2 * time.Second)
+	// 	}
+
+	var data shared.ReservationEvent
+
+	err := json.Unmarshal(value, &data)
+	if err != nil {
+		slog.Error("Error unmarshaling JSON", "error", err)
+		return err
+	}
+
+	//[Idempotency][AllOrNothing]
+	var res interface{}
+	for {
+
+		res, err = script.Run(ctx, rdb, []string{shared.Reservations, ticketUUID, "outbox:" + ticketUUID},
+			shared.Inserting, shared.TopicReservationSuccessful,
+			string(ticketUUID),
+			string(value)).Result()
+
+		if err == nil {
+			break // Success! Break out of the inner infinite loop and continue processing
+		}
+
+		slog.Error("Failed to run Lua reservation script (Redis likely down). Retrying THIS EXACT message...", "ticketUUID", ticketUUID, "error", err)
+		time.Sleep(2 * time.Second)
+	}
+
+	// Redis returns numbers as int64 through go-redis
+	//[DLQ][MANUAL COMMITS]
+	n, ok := res.(int64)
+	if !ok {
+		slog.Error("Unexpected return type from Lua script — TODO: send to DLQ", "result", res)
+		return fmt.Errorf("unexpected lua script return type: %T (%v)", res, res)
+	}
+
+	if n == -2 {
+		//error handling
+		slog.Error("FATAL: Stock key missing in Redis — system misconfiguration, halting worker",
+			"key", shared.Reservations)
+		return fmt.Errorf("fatal: stock key %s not found in Redis, worker cannot continue", shared.Reservations)
+	} else if n == -1 {
+		//TODO:
+		/*
+			Because Set and RPush are two separate network calls, if your worker crashes exactly after the Set but before the RPush:
+			The frontend will see "WAITING_LIST" and keep polling forever.
+			The user will never actually be in the waitlist_queue, so they will never get a ticket if one opens up.
+			For a practice project: It is fine to leave it as is.
+			For enterprise: You would wrap both commands inside a Redis Pipeline or a Lua script to make them execute atomically (all-or-nothing).
+		*/
+		//Bad message here is impossible, you already validated data during json.Unmarshal.
+		userUUID := data.UserUUID
+		phoneUUID := data.PhoneUUID
+		// rdb.Set(ctx, ticketUUID, shared.WaitingList, 0).Err()
+		memberData := ticketUUID + "|" + userUUID + "|" + phoneUUID
+
+		for {
+			err = shared.RetryExternal(5, func() error {
+				_, err = waitlistScript.Run(ctx, rdb, []string{ticketUUID, "waitlist_queue"},
+					shared.WaitingList, memberData).Result()
+				return err
+			})
+			if err == nil {
+				break // Success! Break out of the inner loop
+			}
+			slog.Error("Waitlist script failed (Redis likely down). Retrying THIS EXACT message...", "ticketUUID", ticketUUID, "error", err)
+			time.Sleep(2 * time.Second)
+		}
+
+	} else if n == -3 { //[Idempotency]
+		slog.Info("Duplicate message, idempotency check blocked", "ticketUUID", ticketUUID)
+	} else {
+		// [AllOrNothing] Outbox worker handles Kafka publish
+		// Nothing to do here - outbox entry written atomically in Lua script
+	}
+	return nil
+}

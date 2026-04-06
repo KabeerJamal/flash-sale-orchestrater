@@ -55,6 +55,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	go pollExpiredTimers(ctx, rdb, paymentCancelledWriter)
 
 	// prefill it in redis (POTENTIAL ERROR, if main shuts down and runs again, refill happens even when not supposed to happen)
+	//TODO: need to fix this problem
 	totalProducts, _ := strconv.Atoi(os.Getenv("TOTAL_PRODUCTS"))
 	_, err := rdb.Set(context.Background(), shared.Reservations, totalProducts, 0).Result()
 	if err != nil {
@@ -86,9 +87,9 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 		AllowCredentials: true,
 	}))
 
-	reservationWriter := createWriter(kafkaBrokerAddress, shared.TopicReservation)
+	//reservationWriter := createWriter(kafkaBrokerAddress, shared.TopicReservation)
 	paymentWriter := createWriter(kafkaBrokerAddress, shared.TopicPayment)
-	defer reservationWriter.Close()
+	//defer reservationWriter.Close()
 	defer paymentWriter.Close()
 
 	db, err := sql.Open("pgx", connStr)
@@ -104,7 +105,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 
 	defer db.Close()
 
-	r.POST("/buy-request", buyRequest(rdb, reservationWriter))
+	//r.POST("/buy-request", buyRequest(rdb, reservationWriter))
+	r.POST("/buy-request", buyRequest(rdb))
 
 	r.GET("/status/:ticketId", getTicketStatus(rdb))
 

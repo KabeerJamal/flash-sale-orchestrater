@@ -20,7 +20,7 @@ import (
 	"github.com/stripe/stripe-go/v78/webhook"
 )
 
-func buyRequest(rdb *redis.Client, reservationWriter *kafka.Writer) gin.HandlerFunc {
+func buyRequest(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		var body shared.ReservationEvent
@@ -42,10 +42,18 @@ func buyRequest(rdb *redis.Client, reservationWriter *kafka.Writer) gin.HandlerF
 		b, _ := json.Marshal(body)
 
 		//put ticketUUID and status in redis
-		rdb.Set(context.Background(), ticketUUID, shared.Pending, 0).Err()
+		err = reservationCache(ticketUUID, b)
+		if err != nil {
+			return
+		}
 
-		go producer.StartProducer(reservationWriter, ticketUUID, b)
-		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": shared.Pending}) //Immediate response with ticket ID and status as pending
+		status, err := rdb.Get(context.Background(), ticketUUID).Result()
+		if err != nil {
+			return
+		}
+		//TODO: Not the best approach here, returning pending. could do better and need to account for race conditions
+		//go producer.StartProducer(reservationWriter, ticketUUID, b)
+		c.JSON(200, gin.H{"ticketUUID": ticketUUID, "status": status}) //Immediate response with ticket ID and status as pending
 	}
 
 }
