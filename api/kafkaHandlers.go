@@ -44,11 +44,15 @@ func buyRequest(rdb *redis.Client) gin.HandlerFunc {
 		//put ticketUUID and status in redis
 		err = reservationCache(ticketUUID, b)
 		if err != nil {
+			c.JSON(500, gin.H{
+				"error": "reservation cache failed",
+			})
 			return
 		}
 
 		status, err := rdb.Get(context.Background(), ticketUUID).Result()
 		if err != nil {
+			c.JSON(500, gin.H{"error": "status fetch failed"})
 			return
 		}
 		//TODO: Not the best approach here, returning pending. could do better and need to account for race conditions
