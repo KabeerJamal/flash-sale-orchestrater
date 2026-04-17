@@ -83,8 +83,6 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 	})
 	defer flashSaleEndedWriter.Close()
 
-	fmt.Println("Consumer B started")
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -110,6 +108,13 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 
 			// 3. Print message
 			//fmt.Printf("Received message in insertion Worker: key=%s value=%s\n", string(msg.Key), string(msg.Value))
+
+			if data.PhoneUUID == "" || data.UserUUID == "" || data.TicketUUID == "" {
+				slog.Error("invalid event: empty phoneUUID", "ticketID", data.TicketUUID)
+				shared.SendToDLQ(ctx, dlqWriter, r, msg)
+				r.CommitMessages(ctx, msg)
+				continue
+			}
 
 			//on conflict do nothing is basiaclly idempotency check
 			for {
@@ -193,7 +198,6 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 					time.Sleep(2 * time.Second)
 					continue
 				}
-
 				var totalPaid int64
 				if rowsAffected > 0 {
 
@@ -251,6 +255,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 						}
 					}
 					updateReservationReader.CommitMessages(ctx, msg)
+					//send to notification worker
 
 				} else {
 					if err = tx.Commit(); err != nil {
@@ -298,6 +303,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 								Key:   []byte("sold-out-trigger"),
 								Value: eventBytes,
 							})
+
 							if err == nil {
 								break
 							}
@@ -305,6 +311,7 @@ func ReservationPersistenceWorker(ctx context.Context) error {
 						}
 					}
 					updateReservationReader.CommitMessages(ctx, msg)
+					//send to notification worker
 
 					slog.Info("Successfully recovered from previous crash!", "ticketID", event.TicketUUID)
 
