@@ -180,7 +180,7 @@ func pollUsersAndPhones() ([]db.User, []db.Phone) {
 }
 
 func getUsersAndPhones() ([]db.User, []db.Phone, error) {
-	usersResp, err := http.Get("http://localhost:8080/users")
+	usersResp, err := http.Get("http://localhost:8080/test-users")
 	if err != nil {
 		return nil, nil, err
 	}

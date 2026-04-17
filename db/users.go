@@ -40,7 +40,51 @@ func GetUsers() ([]User, error) {
 
 	defer db.Close()
 
+	//TODO: limit to 10 for when frontend makes a call
 	res, err := db.Query("SELECT * FROM USERS;")
+	if err != nil {
+		slog.Error("DB query error", "error", err)
+	}
+
+	var users []User
+
+	for res.Next() {
+		var p User
+		res.Scan(&p.UserUUID, &p.UserName)
+		users = append(users, p)
+	}
+
+	return users, nil
+
+}
+
+func GetTestUsers() ([]User, error) {
+	user := os.Getenv("POSTGRES_USER")
+	pass := os.Getenv("POSTGRES_PASSWORD")
+	dbname := os.Getenv("POSTGRES_DB")
+	host := os.Getenv("DB_HOST_local")
+
+	connStr := fmt.Sprintf(
+		"postgres://%s:%s@%s/%s?sslmode=disable",
+		user, pass, host, dbname,
+	)
+
+	db, err := sql.Open("pgx", connStr)
+
+	if err != nil {
+		slog.Error("DB connection not established", "error", err)
+		return []User{}, err
+	}
+
+	err = db.Ping()
+	if err != nil {
+		slog.Error("DB Ping failed", "error", err)
+		return []User{}, err
+	}
+
+	defer db.Close()
+
+	res, err := db.Query("SELECT * FROM USERS LIMIT 50;")
 	if err != nil {
 		slog.Error("DB query error", "error", err)
 	}

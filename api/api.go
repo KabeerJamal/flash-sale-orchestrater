@@ -122,6 +122,8 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	//Fetch Users
 	r.GET("/users", getUsers())
 
+	r.GET("/test-users", getTestUsers())
+
 	//Fetch Phones
 	r.GET("/phones", getPhones())
 

@@ -16,6 +16,16 @@ func getUsers() gin.HandlerFunc {
 		c.JSON(200, res)
 	}
 }
+func getTestUsers() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		res, err := db.GetTestUsers()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, res)
+	}
+}
 
 func getPhones() gin.HandlerFunc {
 	return func(c *gin.Context) {
