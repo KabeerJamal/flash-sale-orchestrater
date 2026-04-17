@@ -125,7 +125,7 @@ func RunAPI(ctx context.Context, migrationURL string) error {
 	//Fetch Phones
 	r.GET("/phones", getPhones())
 
-	r.GET("/phones/:phoneUUID/status", getPhoneStatus())
+	r.GET("/phones/:phoneUUID/status", getPhoneStatus(rdb))
 
 	r.POST("/reset", loadTestingTearDown(rdb, db))
 

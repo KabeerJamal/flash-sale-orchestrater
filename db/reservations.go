@@ -1,48 +1,26 @@
 package db
 
 import (
-	"database/sql"
-	"fmt"
-	"log/slog"
-	"os"
+	"context"
+
+	"myproject/shared"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/redis/go-redis/v9"
 )
 
-func GetPhoneStatus(phoneUUID string) (string, error) {
-	user := os.Getenv("POSTGRES_USER")
-	pass := os.Getenv("POSTGRES_PASSWORD")
-	dbname := os.Getenv("POSTGRES_DB")
-	host := os.Getenv("DB_HOST_local")
+func GetPhoneStatus(phoneUUID string, rdb *redis.Client) (string, error) {
+	status, err := rdb.Get(context.Background(), shared.ProductSoldOut).Result()
 
-	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s/%s?sslmode=disable",
-		user, pass, host, dbname,
-	)
-
-	db, err := sql.Open("pgx", connStr)
-
-	if err != nil {
-		slog.Error("DB connection not established", "error", err)
-		return "", err
-	}
-
-	err = db.Ping()
-	if err != nil {
-		slog.Error("DB Ping failed", "error", err)
-		return "", err
-	}
-
-	defer db.Close()
-
-	var status string
-	err = db.QueryRow("SELECT status FROM RESERVATIONS WHERE phoneUUID = $1", phoneUUID).Scan(&status)
-	if err == sql.ErrNoRows {
+	if err == redis.Nil {
 		return "AVAILABLE", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return status, nil
 
+	if status != "1" {
+		return "AVAILABLE", nil
+	}
+	return "SOLD_OUT", nil
 }

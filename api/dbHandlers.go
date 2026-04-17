@@ -28,10 +28,10 @@ func getPhones() gin.HandlerFunc {
 	}
 }
 
-func getPhoneStatus() gin.HandlerFunc {
+func getPhoneStatus(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		phoneUUID := c.Param("phoneUUID")
-		res, err := db.GetPhoneStatus(phoneUUID)
+		res, err := db.GetPhoneStatus(phoneUUID, rdb)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
