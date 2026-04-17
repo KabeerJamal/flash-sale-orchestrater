@@ -1,13 +1,30 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
 
 :root {
-  --bg-color: #0f172a;
-  --text-main: #f8fafc;
-  --text-muted: #94a3b8;
-  --card-bg: #1e293b;
-  --primary: #3b82f6;
-  --primary-hover: #2563eb;
-  --accent: #f59e0b;
+  /* Backgrounds */
+  --bs-body-bg: #F9FAFB;
+  --bg-card: #ffffff;
+
+  /* Text */
+  --text-primary: #111827;
+  --text-secondary: #374151;
+  --text-muted: #9ca3af;
+
+  /* Borders */
+  --card-border-base: #e5e7eb;
+
+  /* Buttons & Highlights */
+  --btn-primary-bg: #ea580c;
+  /* Orange */
+  --btn-primary-hover: #c2410c;
+  --btn-primary-text: #ffffff;
+
+  --btn-reserved-bg: #0f766e;
+  /* Green */
+  --btn-soldout-bg: #475569;
+  /* Gray */
+
+  --card-shadow: 0 0.625rem 0.9375rem -0.1875rem rgba(0, 0, 0, 0.1);
 }
 
 * {
@@ -18,8 +35,8 @@
 
 body {
   font-family: 'Inter', sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-main);
+  background-color: var(--bs-body-bg);
+  color: var(--text-primary);
   min-height: 100vh;
 }
 
@@ -33,65 +50,132 @@ body {
   text-align: center;
   margin-bottom: 3rem;
   padding-bottom: 2rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--card-border-base);
 }
 
 .header h1 {
-  font-size: 3rem;
+  font-size: 2.5rem;
   font-weight: 800;
-  color: transparent;
-  background: linear-gradient(90deg, #60efff, #00ff87);
-  -webkit-background-clip: text;
-  background-clip: text;
+  color: var(--text-primary);
   margin-bottom: 0.5rem;
 }
 
 .header p {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 1.1rem;
 }
 
+.user-selector {
+  margin-top: 20px;
+  margin-bottom: 10px;
+  display: inline-block;
+}
+
+.user-selector label {
+  margin-right: 10px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-selector select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--card-border-base);
+  font-size: 1rem;
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.user-selector select:focus {
+  border-color: var(--text-muted);
+}
+
 .grid-container {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 2rem;
+  margin-top: 2rem;
 }
 
 .phone-card {
-  background: var(--card-bg);
-  border-radius: 16px;
-  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   transition: transform 0.3s ease, box-shadow 0.3s ease;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--card-border-base);
+  overflow: hidden;
+  width: 100%;
+  max-width: 340px;
 }
 
 .phone-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  transform: translateY(-3px);
+  box-shadow: var(--card-shadow);
+  border-color: #d1d5db;
 }
 
 .phone-image-placeholder {
-  height: 200px;
-  background: linear-gradient(135deg, #1e293b, #0f172a);
-  border-radius: 12px;
+  height: 180px;
+  background: #f3f4f6;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 1.5rem;
-  box-shadow: inset 0 2px 10px rgba(0,0,0,0.3);
 }
 
 .phone-image-placeholder span {
-  font-size: 3rem;
+  font-size: 4rem;
+}
+
+.phone-details {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
 }
 
 .phone-details h2 {
   font-size: 1.25rem;
+  font-weight: 600;
   margin-bottom: 0.5rem;
-  color: var(--text-main);
+  color: var(--text-primary);
+}
+
+.status {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 1rem;
+  align-self: flex-start;
+}
+
+.status-available {
+  background-color: #d1fae5;
+  color: #047857;
+}
+
+.status-reserved {
+  background-color: #fef3c7;
+  color: #b45309;
+}
+
+.status-paid,
+.status-sold_out {
+  background-color: #f3f4f6;
+  color: #4b5563;
+}
+
+.status-cancelled {
+  background-color: #ffe4e6;
+  color: #be123c;
 }
 
 .uuid-text {
@@ -100,7 +184,7 @@ body {
   color: var(--text-muted);
   margin-bottom: 1.5rem;
   word-break: break-all;
-  background: rgba(0,0,0,0.2);
+  background: #f3f4f6;
   padding: 0.5rem;
   border-radius: 6px;
 }
@@ -110,38 +194,47 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid #f3f4f6;
 }
 
 .price {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .buy-button {
-  background: var(--primary);
-  color: white;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
   border: none;
-  padding: 0.6rem 1.2rem;
-  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
   font-weight: 600;
-  font-size: 1rem;
+  font-size: 0.875rem;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.1s ease;
 }
 
-.buy-button:hover {
-  background: var(--primary-hover);
+.buy-button:hover:not(:disabled) {
+  background: var(--btn-primary-hover);
 }
 
 .buy-button:active:not(:disabled) {
   transform: scale(0.95);
 }
 
+.buy-button.btn-reserved {
+  background-color: var(--btn-reserved-bg) !important;
+}
+
+.buy-button.btn-soldout {
+  background-color: var(--btn-soldout-bg) !important;
+}
+
 .buy-button:disabled {
-  background: #475569;
   cursor: not-allowed;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 .status-message {
@@ -157,24 +250,36 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .status-message.loading {
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: #ebf5ff;
+  color: #1c64f2;
+  border: 1px solid #d1d5db;
 }
 
 .status-message.error {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.4);
+  background: #ffe4e6;
+  color: #e11d48;
+  border: 1px solid #fda4af;
 }
 
 .status-message.success {
-  background: rgba(16, 185, 129, 0.2);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.4);
+  background: #d1fae5;
+  color: #047857;
+  border: 1px solid #6ee7b7;
+}
+
+.status-message.info {
+  background-color: var(--btn-primary-bg) !important;
+  color: white !important;
 }

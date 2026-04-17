@@ -20,7 +20,6 @@ function App() {
     if (users && users.length > 0 && !selectedUserUUID) {
       setSelectedUserUUID(users[0].UserUUID || users[0].userUUID); // safeguard depending on case
     }
-    console.log(users);
   }, [users, selectedUserUUID]);
 
   // Set up polling interval for phone statuses
@@ -63,18 +62,17 @@ function App() {
         <h1>⚡ Flash Sale Master ⚡</h1>
         <p>Hurry! Inventory is dropping fast. Grab your device.</p>
 
-        {flashMessage && <div className="status-message info" style={{ backgroundColor: '#2196F3', color: 'white' }}>{flashMessage}</div>}
+        {flashMessage && <div className="status-message info">{flashMessage}</div>}
         {loading && !flashMessage && <div className="status-message loading">Processing your order...</div>}
         {error && <div className="status-message error">{error}</div>}
         {success && !flashMessage && <div className="status-message success">Request sent successfully!</div>}
 
-        <div className="user-selector" style={{ marginTop: '20px', marginBottom: '10px' }}>
-          <label htmlFor="user-select" style={{ marginRight: '10px', fontWeight: 'bold' }}>Buying as:</label>
+        <div className="user-selector">
+          <label htmlFor="user-select">Buying as:</label>
           <select
             id="user-select"
             value={selectedUserUUID}
             onChange={(e) => setSelectedUserUUID(e.target.value)}
-            style={{ padding: '8px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '1rem' }}
           >
             {usersLoading && <option value="" disabled>Loading users...</option>}
             {!usersLoading && (!users || users.length === 0) && <option value="" disabled>No users found</option>}
@@ -100,7 +98,7 @@ function App() {
           if (currentStatus === 'RESERVED') {
             buttonText = 'Reserved';
             isDisabled = true;
-          } else if (currentStatus === 'PAID') {
+          } else if (currentStatus === 'PAID' || currentStatus === 'SOLD_OUT') {
             buttonText = 'Sold Out';
             isDisabled = true;
           } else if (currentStatus === 'CANCELLED') {
@@ -116,13 +114,15 @@ function App() {
               <div className="phone-details">
                 <h2>{phone.name}</h2>
                 {/* <p className="uuid-text">{phone.id}</p> */}
+                <span className={`status status-${currentStatus.toLowerCase()}`}>
+                  {currentStatus}
+                </span>
                 <div className="price-row">
                   <span className="price">{phone.price}</span>
                   <button
-                    className="buy-button"
+                    className={`buy-button ${(currentStatus === 'PAID' || currentStatus === 'SOLD_OUT') ? 'btn-soldout' : currentStatus === 'RESERVED' ? 'btn-reserved' : ''}`}
                     onClick={() => handleBuy(phone.id)}
                     disabled={loading || isDisabled}
-                    style={{ backgroundColor: currentStatus === 'PAID' ? '#a0a0a0' : currentStatus === 'RESERVED' ? '#ff9800' : '' }}
                   >
                     {buttonText}
                   </button>
