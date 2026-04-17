@@ -6,14 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"sync"
+	"sync/atomic"
+
 	"log"
 	"math/rand"
 	"myproject/api"
 	"myproject/shared"
-	"net/http"
+
 	"strconv"
-	"sync"
-	"sync/atomic"
 
 	"log/slog"
 	"os"
@@ -448,6 +450,13 @@ func TestHandleFailurePipeline(t *testing.T) {
 			totalPaidRedis, _ := rdb.Get(ctx, shared.TotalPaid).Result()
 			totalPaidInt, _ := strconv.Atoi(totalPaidRedis)
 			return totalPaidInt == initialTotalPaid+1
+		}, 10*time.Second, 500*time.Millisecond, "Expected total Paid in redis to be updated too")
+		require.Eventually(t, func() bool {
+			statusRedis, err := rdb.Get(ctx, event.TicketUUID).Result()
+			if err != nil {
+				return false
+			}
+			return statusRedis == shared.Paid
 		}, 10*time.Second, 500*time.Millisecond, "Expected redis to have status paid for the ticketUUID")
 
 		t.Cleanup(func() {
@@ -456,7 +465,154 @@ func TestHandleFailurePipeline(t *testing.T) {
 
 	})
 
-	//TODO:Idempotency and DLQ test  rollback wokrer (TODO)
-	//TODO: Test external service down
+	//TODO:Test external service down
 	//TODO:Test crash halfway(worker)
+	t.Run("Idempotency Check for rollback Worker", func(t *testing.T) {
+		//get payment status as unpaid.
+
+		//write to rollback worker twice.
+		var initialTotalPaid int
+		err := db.QueryRow("SELECT value FROM CONFIG WHERE key = 'total_paid'").Scan(&initialTotalPaid)
+
+		var event shared.PaymentEvent
+
+		event.TicketUUID = uuid.New().String()
+		event.PhoneUUID = phones[0].PhoneUUID
+		event.UserUUID = users[rand.Intn(len(users))].UserUUID
+		event.PaymentIntentID = "doesnt matter"
+		event.Amount = 32
+		event.Currency = "pkr"
+		event.Status = shared.StripeUnpaid
+
+		_, err = db.Exec(
+			"INSERT INTO RESERVATIONS (ticketID, phoneUUID, userUUID, status) VALUES ($1, $2, $3, 'RESERVED')",
+			event.TicketUUID, event.PhoneUUID, event.UserUUID,
+		)
+		require.NoError(t, err)
+
+		eventBytes, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+
+		w := kafka.NewWriter(kafka.WriterConfig{
+			Brokers: []string{env.brokerAddress},
+			Topic:   shared.TopicPaymentFailure,
+			//Balancer: &kafka.LeastBytes{},
+			Balancer: &kafka.Hash{},
+		})
+
+		w.WriteMessages(
+			ctx,
+			kafka.Message{
+				Key:   []byte(event.TicketUUID),
+				Value: eventBytes,
+			},
+		)
+		w.WriteMessages(
+			ctx,
+			kafka.Message{
+				Key:   []byte(event.TicketUUID),
+				Value: eventBytes,
+			},
+		)
+		require.Eventually(t, func() bool {
+			var count int
+			err := db.QueryRow(
+				"SELECT COUNT(*) FROM RESERVATIONS WHERE ticketID = $1",
+				event.TicketUUID,
+			).Scan(&count)
+			if err != nil {
+				return false
+			}
+			return count == 0
+		}, 15*time.Second, 500*time.Millisecond, "Expected DB row to be deleted")
+
+		require.Eventually(t, func() bool {
+			status, _ := rdb.Get(ctx, event.TicketUUID).Result()
+			return status == shared.Failed
+		}, 10*time.Second, 500*time.Millisecond, "Expected redis to have status paid for the ticketUUID")
+
+		require.Eventually(t, func() bool {
+			var totalPaid int
+			err = db.QueryRow("SELECT value FROM CONFIG WHERE key = 'total_paid'").Scan(&totalPaid)
+			if err != nil {
+				return false
+			}
+			return totalPaid == initialTotalPaid
+		}, 10*time.Second, 500*time.Millisecond, "Exepct db value in total Paid stays the same")
+		require.Eventually(t, func() bool {
+			totalPaidRedis, _ := rdb.Get(ctx, shared.TotalPaid).Result()
+			totalPaidInt, _ := strconv.Atoi(totalPaidRedis)
+			return totalPaidInt == initialTotalPaid
+		}, 10*time.Second, 500*time.Millisecond, "Expected total Paid in redis to stay the same")
+
+		require.Eventually(t, func() bool {
+			statusRedis, err := rdb.Get(ctx, event.TicketUUID).Result()
+			if err != nil {
+				return false
+			}
+			return statusRedis == shared.Failed
+		}, 10*time.Second, 500*time.Millisecond, "Expected redis to have status failed for the ticketUUID")
+
+		t.Cleanup(func() {
+			api.CleanUpFunction(rdb, db)
+		})
+	})
+
+	t.Run("DLQ Check for rollback Worker", func(t *testing.T) {
+
+		host, err := redisC.Host(ctx)
+		require.NoError(t, err)
+		port, err := redisC.MappedPort(ctx, "6379")
+		require.NoError(t, err)
+		rdb := redis.NewClient(&redis.Options{
+			Addr: host + ":" + port.Port(),
+		})
+
+		w := kafka.NewWriter(kafka.WriterConfig{
+			Brokers: []string{env.brokerAddress},
+			Topic:   shared.TopicPaymentFailure,
+			//Balancer: &kafka.LeastBytes{},
+			Balancer: &kafka.Hash{},
+		})
+
+		w.WriteMessages(
+			ctx,
+			// Invalid JSON syntax
+			kafka.Message{
+				Key:   []byte("test-key"),
+				Value: []byte(`{broken json`),
+			},
+			//Wrong type for bool field
+			// kafka.Message{
+			// 	Key:   []byte("test-key"),
+			// 	Value: []byte(`{"ticketUUID":"123","phoneUUID":"456","userUUID":"789","promoted":"notabool"}`),
+			// },
+		)
+
+		dlqReader := kafka.NewReader(kafka.ReaderConfig{
+			Brokers: []string{env.brokerAddress},
+			Topic:   shared.TopicDeadLetterQueue,
+			GroupID: "test-dlq-group",
+		})
+		defer dlqReader.Close()
+
+		dlqMsg, err := dlqReader.ReadMessage(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []byte(`{broken json`), dlqMsg.Value)
+
+		t.Cleanup(func() {
+			api.CleanUpFunction(rdb, db)
+		})
+	})
+
 }
