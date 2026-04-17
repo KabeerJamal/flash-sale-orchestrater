@@ -1,7 +1,8 @@
 package shared
 
 const (
-	StripePaid = "paid"
+	StripePaid   = "paid"
+	StripeUnpaid = "unpaid"
 )
 
 //check PaymentWorker
