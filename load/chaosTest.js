@@ -3,9 +3,11 @@ import { sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 
 export const options = {
-  vus: 100,
-  iterations: 100,
+  vus: 400,
+  iterations: 400,
 };
+//redis-cli --scan | while read k; do v=$(redis-cli GET "$k"); if [ "$v" = "PAID" ]; then echo "$k"; fi; done
+
 
 export function setup() {
   const users = http.get('http://localhost:8080/users').json();
@@ -58,7 +60,7 @@ export default function (data) {
   }
 
   if (createRes.status !== 200) {
-    // If it's chaos, we expect failure
+    badUserInput.add(1);
     return;
   }
 
@@ -66,29 +68,9 @@ export default function (data) {
   let webhookCalled = false;
 
   // Polling for status
-  let errorCount = 0;
-const MAX_ERRORS = 5;
 while (true) {
   const statusRes = http.get(`http://localhost:8080/status/${ticketUUID}`);
 
-  if (statusRes.status !== 200) {
-    errorCount++;
-
-    if (statusRes.status >= 400 && statusRes.status < 500) {
-      badUserInput.add(1);
-      break;
-    }
-
-    if (errorCount >= MAX_ERRORS) {
-      failedPayment.add(1);
-      break;
-    }
-
-    sleep(1);
-    continue;
-  }
-
-  errorCount = 0; // reset on success response
 
   const status = statusRes.json('status');
 
