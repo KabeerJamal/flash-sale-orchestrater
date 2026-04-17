@@ -5,8 +5,8 @@ import { Trend } from 'k6/metrics';
 const vuDuration = new Trend('vu_duration');
 
 export const options = {
-  vus: 50,
-  iterations: 50,
+  vus: 100,
+  iterations: 100,
 };
 
 export function setup() {
@@ -63,7 +63,7 @@ export default function (data) {
     sleep(0.1); // Wait 1 second before checking again
   }
   vuDuration.add(Date.now() - start); 
-  //sleep(10)
+  sleep(5)
 
 }
 
