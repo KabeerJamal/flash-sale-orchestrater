@@ -94,6 +94,11 @@ end
 		return err
 	}
 
+	if data.PhoneUUID == "" || data.UserUUID == "" || data.TicketUUID == "" {
+		slog.Error("invalid event: empty UUID", "ticketID", data.TicketUUID)
+		return err
+	}
+
 	//[Idempotency][AllOrNothing]
 	var res interface{}
 	for {
