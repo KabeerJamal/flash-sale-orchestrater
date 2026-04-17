@@ -52,8 +52,9 @@ func SoldOutWorker(ctx context.Context) error {
 		`)
 
 	for {
-		msg, err := r.ReadMessage(ctx)
-		//rdb.Set(ctx, shared.ProductSoldOut, 1, 0)
+		_, err := r.FetchMessage(ctx)
+		//TODO: this needs to be called only noce, not every time
+		rdb.Set(ctx, shared.ProductSoldOut, 1, 0)
 		if err != nil {
 			slog.Error("Error while reading message", "error", err)
 			time.Sleep(3 * time.Second)
@@ -62,7 +63,9 @@ func SoldOutWorker(ctx context.Context) error {
 		for {
 			_, err := script.Run(ctx, rdb, []string{shared.WaitListQueue}).Result()
 			if err == redis.Nil {
-				break //The list is empty, done
+				time.Sleep(3 * time.Second)
+				continue
+				//break //The list is empty, done
 			}
 			//problem with redis, it is probably down.
 			if err != nil {
@@ -72,7 +75,7 @@ func SoldOutWorker(ctx context.Context) error {
 			}
 		}
 
-		r.CommitMessages(ctx, msg)
+		//r.CommitMessages(ctx, msg)
 	}
 
 	return nil
