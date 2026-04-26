@@ -59,7 +59,7 @@ services:
       - ./go.sum:/app/go.sum       # Mounts the specific file   
     command: go run ./Consumers/reservationPersistenceWorker
     deploy:
-      replicas: 1
+      replicas: 3
   soldoutWorker:
     image: flash-sale-orchestrater-soldoutworker
     env_file:
@@ -74,7 +74,7 @@ services:
       - ./go.sum:/app/go.sum       # Mounts the specific file   
     command: go run ./Consumers/soldoutWorker
     deploy:
-      replicas: 1
+      replicas: 3
 
   outboxWorker:
     image: flash-sale-orchestrater-outbox
@@ -90,7 +90,7 @@ services:
       - ./go.sum:/app/go.sum       # Mounts the specific file   
     command: go run ./Consumers/outboxWorker
     deploy:
-      replicas: 1
+      replicas: 3
 
   paymentWorker:
     image: flash-sale-orchestrater-consumerc
@@ -105,7 +105,7 @@ services:
       - ./go.sum:/app/go.sum      
     command: go run ./Consumers/paymentWorker
     deploy:
-      replicas: 1
+      replicas: 3
   
   rollbackWorker:
     image: flash-sale-orchestrater-rollback
@@ -120,33 +120,7 @@ services:
       - ./go.sum:/app/go.sum      
     command: go run ./Consumers/rollbackWorker
     deploy:
-      replicas: 1
-
-#   prometheus:
-#     image: prom/prometheus:latest
-#     ports:
-#       - '9090:9090'
-#     volumes:
-#       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-#       - ./prometheus_data:/prometheus
-#     command:
-#       - '--config.file=/etc/prometheus/prometheus.yml'
-#       - '--web.enable-remote-write-receiver' # Crucial for K6 pushing metrics
-
-#   grafana:
-#     image: grafana/grafana:latest
-#     ports:
-#       - '3000:3000'
-#     environment:
-#       - GF_SECURITY_ADMIN_USER=admin
-#       - GF_SECURITY_ADMIN_PASSWORD=admin
-#     depends_on:
-#       - prometheus
-#     volumes:
-#       - grafana_data:/var/lib/grafana
-# volumes:
-#   grafana_data:
-
+      replicas: 3
 
 networks:
   default:

@@ -102,21 +102,6 @@ func TestIntegrationPipeline(t *testing.T) {
 
 		require.Equal(t, initialValueRedisReservationInt, valInt+1)
 
-		//--TEST IF INSERTION HAPPENS
-		// // 1. Declare variables to hold the data we read from the database
-		// var dbPhoneUUID, dbUserUUID, dbStatus string
-
-		// // 2. Query the database using the ticketUUID, and scan the results into our variables
-		// err = db.QueryRow(
-		// 	"SELECT phoneUUID, userUUID, status FROM RESERVATIONS WHERE ticketID = $1",
-		// 	ticketUUID,
-		// ).Scan(&dbPhoneUUID, &dbUserUUID, &dbStatus)
-		// require.NoError(t, err) // Fails the test if the row doesn't exist or query fails
-
-		// // 3. Verify the database values match the values from our HTTP request
-		// require.Equal(t, phoneUUID, dbPhoneUUID)
-		// require.Equal(t, userUUID, dbUserUUID)
-		// require.Equal(t, "RESERVED", dbStatus)
 		require.Eventually(t, func() bool {
 			var dbPhoneUUID, dbUserUUID, dbStatus string
 			err := db.QueryRow(
@@ -750,62 +735,5 @@ func TestIntegrationPipeline(t *testing.T) {
 		})
 
 	})
-
-	//same user buying 2 different phones
-	// t.Run("Same User buy 2 different phones", func(t *testing.T) {
-	// 	host, err := redisC.Host(ctx)
-	// 	require.NoError(t, err)
-
-	// 	port, err := redisC.MappedPort(ctx, "6379")
-	// 	require.NoError(t, err)
-	// 	rdb := redis.NewClient(&redis.Options{
-	// 		Addr: host + ":" + port.Port(),
-	// 	})
-
-	// 	userUUID := uuid.New().String()
-	// 	phoneUUID := uuid.New().String()
-	// 	phoneUUID2 := uuid.New().String()
-	// 	body := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID, userUUID)
-	// 	body2 := fmt.Sprintf(`{"phoneUUID": "%s", "userUUID": "%s"}`, phoneUUID2, userUUID)
-
-	// 	resp, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body)))
-	// 	require.NoError(t, err)
-	// 	defer resp.Body.Close()
-	// 	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// 	buyRespBody, err := io.ReadAll(resp.Body)
-	// 	require.NoError(t, err)
-
-	// 	var buyResponse map[string]string
-	// 	err = json.Unmarshal(buyRespBody, &buyResponse)
-	// 	require.NoError(t, err)
-
-	// 	// {"ticketUUID": x, "status":y}
-	// 	require.Equal(t, shared.Pending, buyResponse["status"])
-	// 	require.NotEmpty(t, buyResponse["ticketUUID"])
-
-	// 	resp2, err := http.Post("http://localhost:8080/buy-request", "application/json", bytes.NewBuffer([]byte(body2)))
-	// 	require.NoError(t, err)
-	// 	defer resp2.Body.Close()
-	// 	require.Equal(t, http.StatusOK, resp2.StatusCode)
-
-	// 	buyRespBody2, err := io.ReadAll(resp2.Body)
-	// 	require.NoError(t, err)
-
-	// 	var buyResponse2 map[string]string
-	// 	err = json.Unmarshal(buyRespBody2, &buyResponse2)
-	// 	require.NoError(t, err)
-
-	// 	// {"ticketUUID": x, "status":y}
-	// 	require.Equal(t, shared.Pending, buyResponse2["status"])
-	// 	require.NotEmpty(t, buyResponse2["ticketUUID"])
-
-	// 	require.NotEqual(t, buyResponse["ticketUUID"], buyResponse2["ticketUUID"])
-	// 	t.Cleanup(func() {
-	// 		_ = luaScript.Run(context.Background(), rdb, []string{}, shared.Reservations, 10).Err()
-	// 		db.Exec("DELETE FROM RESERVATIONS")
-	// 		db.Exec("UPDATE CONFIG SET value = 0 WHERE key = 'total_paid'")
-	// 	})
-	// })
 
 }

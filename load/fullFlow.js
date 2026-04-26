@@ -2,9 +2,10 @@ import http from 'k6/http';
 import {sleep } from 'k6';
 import { Counter } from 'k6/metrics'
 
+//TODO: http://localhost:8080 is hardcoded here, not good practice , need to fix that.
 export const options = {
-  vus: 100,
-  iterations: 100,
+  vus: 400,
+  iterations: 400,
 };
 
 export function setup() {

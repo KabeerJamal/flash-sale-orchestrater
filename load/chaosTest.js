@@ -2,11 +2,11 @@ import http from 'k6/http';
 import { sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 
+//TODO: http://localhost:8080 is hardcoded here, not good practice , need to fix that.
 export const options = {
   vus: 400,
   iterations: 400,
 };
-//redis-cli --scan | while read k; do v=$(redis-cli GET "$k"); if [ "$v" = "PAID" ]; then echo "$k"; fi; done
 
 
 export function setup() {
