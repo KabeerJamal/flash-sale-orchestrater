@@ -38,6 +38,8 @@ Your job as a developer is to ensure:
 - ✅ The system stays resilient **even when services fail temporarily**
 - ✅ **Rollback mechanisms** exist when payments fail but reservations were made
 - ✅ Idempotency — sending the same request twice has the same result as sending it once
+- ✅ No partial writes — avoid scenarios where a reservation is saved to Redis but the event fails to publish to Kafka (the outbox worker ensures atomic writes)
+
 
 The key insight: *Anyone can build a system that works when everything goes right. The skill is building one that survives when things go wrong.*
 
