@@ -112,6 +112,9 @@ There's no perfect architecture. Every approach has pros and cons. Your job is t
 **Lesson #2: The happy path doesn't matter**
 The happy path is the least important. It's the edge cases and failure scenarios that break your business. Build systems that survive when things go wrong, not just when they go right.
 
+**Lesson #3: Tests are your safety net**
+Writing tests alongside your code feels like extra work, until you need to refactor or add a new feature. Suddenly, instead of manually checking whether your changes broke something, you just run your test suite. Green means you're good. Red tells you exactly what broke and where. The time you invest writing tests early pays back every single time you touch the codebase later.
+
 ---
 
 ## 📝 License
