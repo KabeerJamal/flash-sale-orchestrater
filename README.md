@@ -8,7 +8,7 @@
 
 ## 📹 Quick Overview
 
-**Watch the 3-minute project overview:** [Video Link - Coming Soon]
+**Watch the 3-minute project overview:** [Video Link](https://www.linkedin.com/posts/kabeer-jamal10a3b5229_systemdesign-softwareengineering-backenddevelopment-activity-7455635637166063616-UYUl?utm_source=share&utm_medium=member_desktop&rcm=ACoAADkwkVoBbecfDIwfZRoDbI0irJ08w4eSSwU)
 
 Learn what this project solves and why it matters in just 3 minutes.
 
